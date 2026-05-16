@@ -4,18 +4,23 @@ import { GoogleGenAI } from '@google/genai'
 const genai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! })
 
 export async function POST(req: NextRequest) {
-  const { imageBase64, mediaType } = await req.json()
+  try {
+    const { imageBase64, mediaType } = await req.json()
 
-  const response = await genai.models.generateContent({
-    model: 'gemini-2.0-flash',
-    contents: [
-      {
-        parts: [
-          {
-            inlineData: { mimeType: mediaType, data: imageBase64 },
-          },
-          {
-            text: `이 와인 라벨을 분석해서 아래 JSON 형식으로만 응답해. 마크다운 없이 순수 JSON만.
+    if (!imageBase64 || !mediaType) {
+      return NextResponse.json({ success: false, error: '이미지 데이터가 없어요.' }, { status: 400 })
+    }
+
+    const response = await genai.models.generateContent({
+      model: 'gemini-2.0-flash',
+      contents: [
+        {
+          parts: [
+            {
+              inlineData: { mimeType: mediaType, data: imageBase64 },
+            },
+            {
+              text: `이 와인 라벨을 분석해서 아래 JSON 형식으로만 응답해. 마크다운 없이 순수 JSON만.
 
 {
   "name": "와인 이름 (없으면 null)",
@@ -28,19 +33,21 @@ export async function POST(req: NextRequest) {
   "is_natural": true/false (내추럴 와인 여부, 모르면 true),
   "ai_description": "이 와인에 대한 간단한 한국어 설명 1-2문장"
 }`,
-          },
-        ],
-      },
-    ],
-  })
+            },
+          ],
+        },
+      ],
+    })
 
-  const text = response.text ?? ''
-
-  try {
+    const text = response.text ?? ''
     const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim()
     const wineData = JSON.parse(cleaned)
     return NextResponse.json({ success: true, data: wineData })
-  } catch {
-    return NextResponse.json({ success: false, error: '라벨 인식에 실패했어요.' }, { status: 400 })
+  } catch (err: any) {
+    console.error('scan error:', err)
+    return NextResponse.json(
+      { success: false, error: err?.message ?? '라벨 인식에 실패했어요. 다시 시도해주세요.' },
+      { status: 500 }
+    )
   }
 }

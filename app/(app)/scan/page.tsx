@@ -41,12 +41,22 @@ function ScanContent() {
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     if (!file) return
-    setMediaType(file.type || 'image/jpeg')
+    // iOS HEIC → force jpeg
+    const mime = file.type && file.type !== 'image/heic' && file.type !== 'image/heif'
+      ? file.type
+      : 'image/jpeg'
+    setMediaType(mime)
     setPreview(URL.createObjectURL(file))
     setWineData(null)
     setError('')
     const reader = new FileReader()
-    reader.onload = () => setImageBase64((reader.result as string).split(',')[1])
+    reader.onerror = () => setError('이미지를 읽을 수 없어요. 다른 사진으로 시도해보세요.')
+    reader.onload = () => {
+      const result = reader.result as string
+      const base64 = result.split(',')[1]
+      if (base64) setImageBase64(base64)
+      else setError('이미지 변환에 실패했어요.')
+    }
     reader.readAsDataURL(file)
   }
 
