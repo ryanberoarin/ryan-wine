@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef, use } from 'react'
 import Link from 'next/link'
-import { supabase, Session, SessionWine, Message } from '@/lib/supabase'
+import { supabase, Session, SessionWine, Message, SessionRsvp } from '@/lib/supabase'
 import { useUser } from '@/components/UserContext'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -12,25 +12,38 @@ const statusLabel: Record<string, string> = {
   planning: '준비 중', active: '진행 중', completed: '완료',
 }
 
+type Tab = 'chat' | 'wines' | 'settlement'
+
 export default function SessionDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
   const { user } = useUser()
   const [session, setSession] = useState<Session | null>(null)
   const [wines, setWines] = useState<SessionWine[]>([])
   const [messages, setMessages] = useState<Message[]>([])
+  const [rsvps, setRsvps] = useState<SessionRsvp[]>([])
+  const [myRsvp, setMyRsvp] = useState<'attending' | 'not_attending' | null>(null)
   const [text, setText] = useState('')
   const [sending, setSending] = useState(false)
-  const [tab, setTab] = useState<'chat' | 'wines'>('chat')
+  const [tab, setTab] = useState<Tab>('chat')
   const [showAddWine, setShowAddWine] = useState(false)
   const [newWineName, setNewWineName] = useState('')
   const [addingWine, setAddingWine] = useState(false)
+  const [costInput, setCostInput] = useState('')
+  const [savingCost, setSavingCost] = useState(false)
+  const [generatingReview, setGeneratingReview] = useState(false)
+  const [review, setReview] = useState('')
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     supabase.from('sessions').select('*').eq('id', id).single()
-      .then(({ data }) => setSession(data as Session))
+      .then(({ data }) => {
+        const s = data as Session
+        setSession(s)
+        if (s?.total_cost) setCostInput(String(s.total_cost))
+      })
 
     fetchWines()
+    fetchRsvps()
 
     supabase.from('messages')
       .select('*, user:users(nickname), wine:wines(name)')
@@ -55,6 +68,17 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
     return () => { supabase.removeChannel(channel) }
   }, [id])
 
+  useEffect(() => {
+    if (user) {
+      const mine = rsvps.find((r) => r.user_id === user.id)
+      setMyRsvp(mine?.status ?? null)
+    }
+  }, [rsvps, user])
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages])
+
   async function fetchWines() {
     const { data } = await supabase
       .from('session_wines')
@@ -65,9 +89,23 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
     setWines((data as SessionWine[]) ?? [])
   }
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+  async function fetchRsvps() {
+    const { data } = await supabase
+      .from('session_rsvps')
+      .select('*, user:users(nickname)')
+      .eq('session_id', id)
+    setRsvps((data as SessionRsvp[]) ?? [])
+  }
+
+  async function handleRsvp(status: 'attending' | 'not_attending') {
+    if (!user) return
+    await supabase.from('session_rsvps').upsert(
+      { session_id: id, user_id: user.id, status },
+      { onConflict: 'session_id,user_id' }
+    )
+    setMyRsvp(status)
+    fetchRsvps()
+  }
 
   async function sendMessage() {
     if (!text.trim() || !user) return
@@ -108,6 +146,39 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
     setWines((prev) => prev.filter((w) => w.id !== swId))
   }
 
+  async function saveCost() {
+    const cost = parseInt(costInput.replace(/,/g, ''))
+    if (isNaN(cost) || cost <= 0) return
+    setSavingCost(true)
+    await supabase.from('sessions').update({ total_cost: cost }).eq('id', id)
+    setSession((prev) => prev ? { ...prev, total_cost: cost } : prev)
+    setSavingCost(false)
+  }
+
+  async function generateReview() {
+    setGeneratingReview(true)
+    setReview('')
+    try {
+      const res = await fetch('/api/review', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: id }),
+      })
+      const json = await res.json()
+      if (json.success) setReview(json.review)
+      else setReview('후기 생성에 실패했어요. 다시 시도해주세요.')
+    } catch {
+      setReview('후기 생성에 실패했어요. 다시 시도해주세요.')
+    }
+    setGeneratingReview(false)
+  }
+
+  const attendingList = rsvps.filter((r) => r.status === 'attending')
+  const attendingCount = attendingList.length
+  const perPerson = session?.total_cost && attendingCount > 0
+    ? Math.ceil(session.total_cost / attendingCount)
+    : null
+
   if (!session) {
     return <div className="min-h-screen flex items-center justify-center"><div className="text-4xl animate-pulse">🍷</div></div>
   }
@@ -127,28 +198,57 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
             </span>
           )}
         </div>
+
+        {/* RSVP */}
+        <div className="flex items-center gap-3 mt-3">
+          <div className="flex gap-2">
+            <button
+              onClick={() => handleRsvp('attending')}
+              className={`text-xs px-3 py-1.5 rounded-full border transition-colors font-medium ${
+                myRsvp === 'attending'
+                  ? 'bg-green-500 text-white border-green-500'
+                  : 'border-border text-muted-foreground'
+              }`}
+            >
+              ✓ 참석
+            </button>
+            <button
+              onClick={() => handleRsvp('not_attending')}
+              className={`text-xs px-3 py-1.5 rounded-full border transition-colors font-medium ${
+                myRsvp === 'not_attending'
+                  ? 'bg-muted text-foreground border-foreground/30'
+                  : 'border-border text-muted-foreground'
+              }`}
+            >
+              ✕ 불참
+            </button>
+          </div>
+          {attendingCount > 0 && (
+            <span className="text-xs text-muted-foreground">참석 {attendingCount}명</span>
+          )}
+        </div>
+
+        {/* 탭 */}
         <div className="flex gap-2 mt-3">
-          {(['chat', 'wines'] as const).map((t) => (
+          {([['chat', '💬 채팅'], ['wines', `🍾 와인 (${wines.length})`], ['settlement', '💰 정산']] as [Tab, string][]).map(([t, label]) => (
             <button key={t} onClick={() => setTab(t)}
               className={`text-sm px-3 py-1 rounded-full transition-colors ${tab === t ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}`}>
-              {t === 'chat' ? '💬 채팅' : `🍾 와인 리스트 (${wines.length})`}
+              {label}
             </button>
           ))}
         </div>
       </div>
 
-      {tab === 'wines' ? (
+      {/* 와인 탭 */}
+      {tab === 'wines' && (
         <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
           <div className="flex justify-between items-center">
             <p className="text-sm text-muted-foreground">제안된 와인 목록</p>
             <div className="flex gap-2">
-              <button onClick={() => setShowAddWine(!showAddWine)}
-                className="text-xs text-primary font-medium">
+              <button onClick={() => setShowAddWine(!showAddWine)} className="text-xs text-primary font-medium">
                 + 이름으로 제안
               </button>
-              <Link href={`/scan?session_id=${id}`} className="text-xs text-muted-foreground">
-                라벨 스캔
-              </Link>
+              <Link href={`/scan?session_id=${id}`} className="text-xs text-muted-foreground">라벨 스캔</Link>
             </div>
           </div>
 
@@ -156,14 +256,10 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
             <div className="bg-muted rounded-xl p-3 space-y-2">
               <p className="text-xs text-muted-foreground">와인 이름만 입력해도 리스트에 추가돼요</p>
               <div className="flex gap-2">
-                <Input
-                  placeholder="ex. Coulée de Serrant 2019"
-                  value={newWineName}
+                <Input placeholder="ex. Coulée de Serrant 2019" value={newWineName}
                   onChange={(e) => setNewWineName(e.target.value)}
                   onKeyDown={(e) => { if (e.key === 'Enter') addWineByName() }}
-                  className="flex-1"
-                  autoFocus
-                />
+                  className="flex-1" autoFocus />
                 <Button size="sm" onClick={addWineByName} disabled={!newWineName.trim() || addingWine}>
                   {addingWine ? '...' : '추가'}
                 </Button>
@@ -175,9 +271,7 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
             <div className="text-center py-12 space-y-2">
               <div className="text-4xl">🫙</div>
               <p className="text-sm text-muted-foreground">아직 와인이 없어요</p>
-              <button onClick={() => setShowAddWine(true)} className="text-primary text-sm underline">
-                와인 제안하기
-              </button>
+              <button onClick={() => setShowAddWine(true)} className="text-primary text-sm underline">와인 제안하기</button>
             </div>
           ) : (
             wines.map((sw) => (
@@ -195,8 +289,7 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
                   </Badge>
                 </div>
                 <div className="flex gap-3">
-                  <Link href={`/notes/new?wine_id=${sw.wine_id}&session_id=${id}`}
-                    className="text-xs text-primary font-medium">
+                  <Link href={`/notes/new?wine_id=${sw.wine_id}&session_id=${id}`} className="text-xs text-primary font-medium">
                     시음평 쓰기
                   </Link>
                   {user?.is_admin && sw.status !== 'confirmed' && (
@@ -210,7 +303,87 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
             ))
           )}
         </div>
-      ) : (
+      )}
+
+      {/* 정산 탭 */}
+      {tab === 'settlement' && (
+        <div className="flex-1 overflow-y-auto px-4 py-4 space-y-6">
+          {/* 참석자 */}
+          <div className="space-y-2">
+            <p className="text-sm font-semibold">참석자 ({attendingCount}명)</p>
+            {attendingList.length === 0 ? (
+              <p className="text-sm text-muted-foreground">아직 참석 응답이 없어요</p>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {attendingList.map((r) => (
+                  <span key={r.id} className="text-xs bg-green-50 text-green-700 border border-green-200 px-2 py-1 rounded-full">
+                    {(r as any).user?.nickname ?? '멤버'}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* 비용 입력 */}
+          <div className="space-y-2">
+            <p className="text-sm font-semibold">총 비용</p>
+            {user?.is_admin ? (
+              <div className="flex gap-2">
+                <Input placeholder="금액 입력 (원)" value={costInput}
+                  onChange={(e) => setCostInput(e.target.value)}
+                  type="number" className="flex-1" />
+                <Button size="sm" onClick={saveCost} disabled={savingCost}>
+                  {savingCost ? '...' : '저장'}
+                </Button>
+              </div>
+            ) : (
+              <p className="text-lg font-bold text-primary">
+                {session.total_cost ? `${session.total_cost.toLocaleString()}원` : '미입력'}
+              </p>
+            )}
+          </div>
+
+          {/* 1인당 금액 */}
+          {session.total_cost && attendingCount > 0 && (
+            <div className="bg-primary/5 border border-primary/20 rounded-2xl p-5 text-center space-y-1">
+              <p className="text-xs text-muted-foreground">1인당 금액</p>
+              <p className="text-3xl font-bold text-primary">{perPerson?.toLocaleString()}원</p>
+              <p className="text-xs text-muted-foreground">
+                총 {session.total_cost.toLocaleString()}원 ÷ {attendingCount}명
+              </p>
+            </div>
+          )}
+
+          {/* 후기 생성 (관리자) */}
+          {user?.is_admin && (
+            <div className="space-y-3 pt-2 border-t border-border">
+              <div>
+                <p className="text-sm font-semibold">모임 후기 자동 생성</p>
+                <p className="text-xs text-muted-foreground mt-0.5">시음평 데이터를 바탕으로 회사 게시판용 후기를 AI가 작성해요</p>
+              </div>
+              <Button onClick={generateReview} disabled={generatingReview} className="w-full">
+                {generatingReview ? '✍️ 작성 중...' : '✍️ 후기 생성하기'}
+              </Button>
+              {review && (
+                <div className="space-y-2">
+                  <div className="bg-muted rounded-xl p-4 text-sm whitespace-pre-wrap leading-relaxed">
+                    {review}
+                  </div>
+                  <button
+                    onClick={() => navigator.clipboard.writeText(review)}
+                    className="text-xs text-primary font-medium"
+                  >
+                    📋 복사하기
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 채팅 탭 */}
+      {tab === 'chat' && (
         <>
           <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
             {messages.length === 0 && (
