@@ -10,6 +10,7 @@ export type User = {
   nickname: string
   device_token: string
   is_admin: boolean
+  is_active: boolean
   created_at: string
 }
 
@@ -51,6 +52,7 @@ export type Session = {
   scheduled_at: string | null
   status: 'planning' | 'active' | 'completed'
   total_cost: number | null
+  subsidy_carryover: number | null
   created_by: string | null
   created_at: string
 }
@@ -62,6 +64,16 @@ export type SessionRsvp = {
   status: 'attending' | 'not_attending'
   created_at: string
   user?: User
+}
+
+export type CostItem = {
+  id: string
+  session_id: string
+  round_number: number
+  category: 'wine' | 'venue' | 'taxi' | 'food' | 'other'
+  description: string | null
+  amount: number
+  created_at: string
 }
 
 export type SessionWine = {
