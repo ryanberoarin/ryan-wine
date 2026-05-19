@@ -1,6 +1,7 @@
 'use client'
 
 import { createContext, useContext, useEffect, useState } from 'react'
+import { supabase } from '@/lib/supabase'
 import type { User } from '@/lib/auth'
 
 type UserContextType = {
@@ -29,10 +30,27 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    // localStorage에서 바로 읽기 (비동기 불필요)
     const stored = getStoredUser()
+    if (!stored) { setLoading(false); return }
+
+    // localStorage로 즉시 렌더링
     setUser(stored)
     setLoading(false)
+
+    // DB 검증은 백그라운드 (삭제된 계정 감지)
+    ;(async () => {
+      try {
+        const { data } = await supabase.from('users').select('*').eq('id', stored.id).maybeSingle()
+        if (data) {
+          setUser(data as User)
+          localStorage.setItem('wine_club_user', JSON.stringify(data))
+        } else {
+          localStorage.removeItem('wine_club_user')
+          localStorage.removeItem('wine_club_device_token')
+          window.location.href = '/login'
+        }
+      } catch {}
+    })()
   }, [])
 
   return (

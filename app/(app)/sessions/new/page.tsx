@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { useUser } from '@/components/UserContext'
@@ -9,13 +9,56 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 
+function defaultTitle() {
+  const next = (new Date().getMonth() + 2) % 12 || 12
+  return `${next}월 정기모임`
+}
+
+function computeRsvpDeadline(scheduledAt: string): string {
+  const d = new Date(scheduledAt)
+  d.setDate(d.getDate() - 14)
+  d.setHours(18, 0, 0, 0)
+  // datetime-local format: YYYY-MM-DDTHH:MM
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T18:00`
+}
+
 export default function NewSessionPage() {
   const router = useRouter()
   const { user } = useUser()
-  const [title, setTitle] = useState('')
+  const [title, setTitle] = useState(defaultTitle())
   const [description, setDescription] = useState('')
+  const [venue, setVenue] = useState('')
   const [scheduledAt, setScheduledAt] = useState('')
+  const [rsvpDeadline, setRsvpDeadline] = useState('')
+  const [carryover, setCarryover] = useState(0)
+  const [carryoverLoading, setCarryoverLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    async function fetchCarryover() {
+      const { data: lastSession } = await supabase
+        .from('sessions')
+        .select('id')
+        .eq('settlement_published', true)
+        .order('scheduled_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      if (!lastSession) { setCarryoverLoading(false); return }
+
+      const [{ count: totalActive }, { count: attendingCount }] = await Promise.all([
+        supabase.from('users').select('*', { count: 'exact', head: true }).eq('is_active', true),
+        supabase.from('session_rsvps').select('*', { count: 'exact', head: true })
+          .eq('session_id', lastSession.id).eq('status', 'attending'),
+      ])
+
+      const notAttending = Math.max(0, (totalActive ?? 0) - (attendingCount ?? 0))
+      setCarryover(notAttending * 17500)
+      setCarryoverLoading(false)
+    }
+    fetchCarryover()
+  }, [])
 
   if (!user?.is_admin) {
     return (
@@ -23,6 +66,11 @@ export default function NewSessionPage() {
         <p className="text-muted-foreground">관리자만 모임을 만들 수 있어요.</p>
       </div>
     )
+  }
+
+  function handleScheduledAtChange(value: string) {
+    setScheduledAt(value)
+    if (value) setRsvpDeadline(computeRsvpDeadline(value))
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -34,12 +82,25 @@ export default function NewSessionPage() {
       .insert({
         title: title.trim(),
         description: description.trim() || null,
-        scheduled_at: scheduledAt || null,
+        venue: venue.trim() || null,
+        scheduled_at: scheduledAt ? new Date(scheduledAt).toISOString() : null,
+        rsvp_deadline: rsvpDeadline ? new Date(rsvpDeadline).toISOString() : null,
+        subsidy_carryover: carryover,
         created_by: user!.id,
       })
       .select()
       .single()
     if (!error && data) {
+      // 참석 투표 시작 알림 발송
+      fetch('/api/push/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: '🥂 새 모임 참석 투표가 시작됐어요!',
+          body: `${data.title} 참석 여부를 알려주세요.${data.rsvp_deadline ? ` 마감: ${new Date(data.rsvp_deadline).toLocaleDateString('ko-KR', { month: 'long', day: 'numeric' })}` : ''}`,
+          url: `/sessions/${data.id}`,
+        }),
+      }).catch(() => {})
       router.push(`/sessions/${data.id}`)
     }
     setSaving(false)
@@ -57,7 +118,6 @@ export default function NewSessionPage() {
           <Label htmlFor="title">모임 이름</Label>
           <Input
             id="title"
-            placeholder="ex. 6월 내추럴와인 모임"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             autoFocus
@@ -71,18 +131,60 @@ export default function NewSessionPage() {
             placeholder="어떤 테마의 모임인지..."
             value={description}
             onChange={(e) => setDescription(e.target.value)}
-            rows={3}
+            rows={2}
           />
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="date">날짜 <span className="text-muted-foreground font-normal">(선택)</span></Label>
+          <Label htmlFor="venue">장소 <span className="text-muted-foreground font-normal">(선택)</span></Label>
+          <Input
+            id="venue"
+            placeholder="ex. 강남구 와인바 오르치아"
+            value={venue}
+            onChange={(e) => setVenue(e.target.value)}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="date">모임 날짜 <span className="text-muted-foreground font-normal">(선택)</span></Label>
           <Input
             id="date"
             type="datetime-local"
             value={scheduledAt}
-            onChange={(e) => setScheduledAt(e.target.value)}
+            onChange={(e) => handleScheduledAtChange(e.target.value)}
           />
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="rsvp">
+            참석 투표 마감
+            <span className="text-muted-foreground font-normal ml-1">(모임 2주 전 오후 6시 자동 설정)</span>
+          </Label>
+          <Input
+            id="rsvp"
+            type="datetime-local"
+            value={rsvpDeadline}
+            onChange={(e) => setRsvpDeadline(e.target.value)}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="carryover">
+            전월 이월 지원금
+            <span className="text-muted-foreground font-normal ml-1">
+              {carryoverLoading ? '(계산 중...)' : carryover > 0 ? '(자동 계산됨)' : '(이전 정산 없음)'}
+            </span>
+          </Label>
+          <Input
+            id="carryover"
+            type="number"
+            value={carryover}
+            onChange={(e) => setCarryover(parseInt(e.target.value) || 0)}
+            placeholder="0"
+          />
+          {!carryoverLoading && carryover > 0 && (
+            <p className="text-xs text-muted-foreground">직전 정산 불참자 이월금이 자동 입력됐어요. 필요 시 수정 가능해요.</p>
+          )}
         </div>
 
         <Button type="submit" disabled={!title.trim() || saving} className="w-full">

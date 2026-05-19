@@ -57,6 +57,7 @@ function NewNoteContent() {
   const sessionId = searchParams.get('session_id')
   const { user } = useUser()
 
+
   const [wine, setWine] = useState<Wine | null>(null)
   const [rating, setRating] = useState(0)
   const [selected, setSelected] = useState<Record<string, string[]>>({

@@ -1,33 +1,48 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useEffect } from 'react'
 import { usePathname } from 'next/navigation'
 import { useUser } from '@/components/UserContext'
 import BottomNav from '@/components/BottomNav'
-import type { User } from '@/lib/auth'
+
+async function registerPush(userId: string) {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return
+  try {
+    const reg = await navigator.serviceWorker.register('/sw.js')
+    const permission = await Notification.requestPermission()
+    if (permission !== 'granted') return
+
+    const existing = await reg.pushManager.getSubscription()
+    const sub = existing ?? await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY,
+    })
+
+    await fetch('/api/push/subscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subscription: sub.toJSON(), userId }),
+    })
+  } catch {
+    // 푸시 지원 안 되는 환경 무시
+  }
+}
 
 export default function AuthLayoutClient({ children }: { children: React.ReactNode }) {
-  const { setUser } = useUser()
+  const { user, loading } = useUser()
   const pathname = usePathname()
 
-  const [user] = useState<User | null>(() => {
-    try {
-      const stored = localStorage.getItem('wine_club_user')
-      return stored ? JSON.parse(stored) : null
-    } catch {
-      return null
-    }
-  })
-
   useEffect(() => {
-    if (user) {
-      setUser(user)
-    } else {
+    if (!loading && !user) {
       window.location.href = '/login'
     }
-  }, [])
+  }, [user, loading])
 
-  if (!user) return null
+  useEffect(() => {
+    if (user) registerPush(user.id)
+  }, [user])
+
+  if (loading || !user) return null
 
   return (
     <div className="min-h-screen flex flex-col max-w-md mx-auto">

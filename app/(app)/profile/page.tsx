@@ -6,7 +6,6 @@ import { useRouter } from 'next/navigation'
 import { supabase, TastingNote } from '@/lib/supabase'
 import { useUser } from '@/components/UserContext'
 import { logout } from '@/lib/auth'
-import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 
 export default function ProfilePage() {
@@ -35,8 +34,9 @@ export default function ProfilePage() {
 
   if (!user) return null
 
-  const avgRating = notes.filter((n) => n.rating).length > 0
-    ? (notes.reduce((sum, n) => sum + (n.rating ?? 0), 0) / notes.filter((n) => n.rating).length).toFixed(1)
+  const ratedNotes = notes.filter((n) => n.rating)
+  const avgRating = ratedNotes.length > 0
+    ? (ratedNotes.reduce((sum, n) => sum + (n.rating ?? 0), 0) / ratedNotes.length).toFixed(1)
     : null
 
   return (
@@ -77,7 +77,9 @@ export default function ProfilePage() {
           <div className="text-center py-8 space-y-2">
             <div className="text-4xl">🫙</div>
             <p className="text-sm text-muted-foreground">아직 시음 기록이 없어요</p>
-            <Link href="/scan" className="text-primary text-sm underline">와인 스캔하기</Link>
+            {user.is_admin && (
+              <Link href="/scan" className="text-primary text-sm underline">와인 스캔하기</Link>
+            )}
           </div>
         ) : (
           notes.map((note) => (

@@ -49,10 +49,13 @@ export type Session = {
   id: string
   title: string
   description: string | null
+  venue: string | null
   scheduled_at: string | null
+  rsvp_deadline: string | null
   status: 'planning' | 'active' | 'completed'
   total_cost: number | null
   subsidy_carryover: number | null
+  settlement_published: boolean
   created_by: string | null
   created_at: string
 }
@@ -62,6 +65,16 @@ export type SessionRsvp = {
   session_id: string
   user_id: string
   status: 'attending' | 'not_attending'
+  created_at: string
+  user?: User
+}
+
+export type SessionPenalty = {
+  id: string
+  session_id: string
+  user_id: string
+  amount: number
+  reason: string
   created_at: string
   user?: User
 }

@@ -1,0 +1,9 @@
+{
+  "alias": ["naver-naturalvin.vercel.app"],
+  "crons": [
+    {
+      "path": "/api/cron/remind",
+      "schedule": "0 0 * * *"
+    }
+  ]
+}

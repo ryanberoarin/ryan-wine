@@ -14,85 +14,59 @@ function getOrCreateDeviceToken(): string {
   return token
 }
 
-function generateRecoveryCode(): string {
-  return Math.floor(100000 + Math.random() * 900000).toString()
-}
-
-export async function getCurrentUser(): Promise<User | null> {
-  const cached = localStorage.getItem(USER_KEY)
-  if (cached) return JSON.parse(cached)
-
-  const token = localStorage.getItem(DEVICE_TOKEN_KEY)
-  if (!token) return null
-
-  const { data } = await supabase
-    .from('users')
-    .select('*')
-    .eq('device_token', token)
-    .single()
-
-  if (data) {
-    localStorage.setItem(USER_KEY, JSON.stringify(data))
-    return data
-  }
-  return null
-}
-
 export async function login(
   nickname: string,
   inviteCode: string,
   adminPasscode?: string
-): Promise<{ user: User; recoveryCode?: string }> {
+): Promise<{ user: User }> {
   const correctInvite = process.env.NEXT_PUBLIC_INVITE_CODE ?? 'naturalvin'
-  const correctAdmin = process.env.NEXT_PUBLIC_ADMIN_PASSCODE ?? 'wine1234'
+  const deviceToken = getOrCreateDeviceToken()
 
-  if (inviteCode.trim().toLowerCase() !== correctInvite.toLowerCase() && adminPasscode !== correctAdmin) {
+  // 관리자 로그인: 서버 API에서 passcode 검증 (클라이언트에 노출 안 됨)
+  if (adminPasscode) {
+    const res = await fetch('/api/admin-login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nickname: nickname.trim(), deviceToken, passcode: adminPasscode }),
+    })
+    const json = await res.json()
+    if (!res.ok) throw new Error(json.error ?? '관리자 코드가 올바르지 않아요.')
+    localStorage.setItem(USER_KEY, JSON.stringify(json.user))
+    return { user: json.user as User }
+  }
+
+  // 1. 현재 기기에 이미 로그인된 유저
+  const { data: byToken } = await supabase
+    .from('users').select('*').eq('device_token', deviceToken).maybeSingle()
+  if (byToken) {
+    localStorage.setItem(USER_KEY, JSON.stringify(byToken))
+    return { user: byToken as User }
+  }
+
+  // 2. 같은 이름의 기존 유저 → 코드 없이 이 기기로 로그인
+  const { data: byNickname } = await supabase
+    .from('users').select('*').eq('nickname', nickname.trim()).maybeSingle()
+  if (byNickname) {
+    await supabase.from('users').update({ device_token: deviceToken }).eq('id', byNickname.id)
+    const updated = { ...byNickname, device_token: deviceToken }
+    localStorage.setItem(USER_KEY, JSON.stringify(updated))
+    return { user: updated as User }
+  }
+
+  // 3. 신규 가입: 초대코드 필요
+  if (inviteCode.trim().toLowerCase() !== correctInvite.toLowerCase()) {
     throw new Error('초대 코드가 올바르지 않아요.')
   }
 
-  const isAdmin = adminPasscode === correctAdmin
-  const deviceToken = getOrCreateDeviceToken()
-
-  const { data: existing } = await supabase
-    .from('users')
-    .select('*')
-    .eq('device_token', deviceToken)
-    .single()
-
-  if (existing) {
-    localStorage.setItem(USER_KEY, JSON.stringify(existing))
-    return { user: existing as User }
-  }
-
-  const recoveryCode = generateRecoveryCode()
-
   const { data, error } = await supabase
     .from('users')
-    .insert({ nickname, device_token: deviceToken, is_admin: isAdmin, recovery_code: recoveryCode })
+    .insert({ nickname: nickname.trim(), device_token: deviceToken, is_admin: false })
     .select()
     .single()
 
   if (error) throw error
-
   localStorage.setItem(USER_KEY, JSON.stringify(data))
-  return { user: data as User, recoveryCode }
-}
-
-export async function loginWithRecoveryCode(recoveryCode: string): Promise<User> {
-  const { data, error } = await supabase
-    .from('users')
-    .select('*')
-    .eq('recovery_code', recoveryCode.trim())
-    .single()
-
-  if (error || !data) throw new Error('복구 코드를 찾을 수 없어요.')
-
-  const newDeviceToken = getOrCreateDeviceToken()
-  await supabase.from('users').update({ device_token: newDeviceToken }).eq('id', data.id)
-
-  const updated = { ...data, device_token: newDeviceToken }
-  localStorage.setItem(USER_KEY, JSON.stringify(updated))
-  return updated as User
+  return { user: data as User }
 }
 
 export function logout() {

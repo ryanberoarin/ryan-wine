@@ -9,6 +9,11 @@ export const metadata: Metadata = {
   title: '와인클럽',
   description: '우리만의 내추럴와인 공간',
   manifest: '/manifest.json',
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'black-translucent',
+    title: '와인클럽',
+  },
 }
 
 export const viewport: Viewport = {
