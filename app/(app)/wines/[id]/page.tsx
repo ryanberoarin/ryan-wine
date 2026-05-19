@@ -13,17 +13,10 @@ const wineTypeLabel: Record<string, string> = {
 
 type KeywordEntry = { keyword: string; count: number }
 
-function topKeywords(notes: TastingNote[]): KeywordEntry[] {
+function topByField(notes: TastingNote[], field: 'aroma_keywords' | 'taste_keywords' | 'texture_keywords', limit = 5): KeywordEntry[] {
   const freq: Record<string, number> = {}
-  notes.forEach((n) => {
-    ;[...(n.aroma_keywords ?? []), ...(n.taste_keywords ?? []), ...(n.texture_keywords ?? [])].forEach((k) => {
-      freq[k] = (freq[k] ?? 0) + 1
-    })
-  })
-  return Object.entries(freq)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 8)
-    .map(([keyword, count]) => ({ keyword, count }))
+  notes.forEach((n) => (n[field] ?? []).forEach((k) => { freq[k] = (freq[k] ?? 0) + 1 }))
+  return Object.entries(freq).sort((a, b) => b[1] - a[1]).slice(0, limit).map(([keyword, count]) => ({ keyword, count }))
 }
 
 export default function WineDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -57,7 +50,9 @@ export default function WineDetailPage({ params }: { params: Promise<{ id: strin
     count: rated.filter((n) => n.rating === r).length,
   }))
 
-  const keywords = topKeywords(notes)
+  const aromaKw = topByField(notes, 'aroma_keywords')
+  const tasteKw = topByField(notes, 'taste_keywords')
+  const textureKw = topByField(notes, 'texture_keywords')
   const myNote = notes.find((n) => n.user_id === user?.id)
 
   return (
@@ -121,19 +116,35 @@ export default function WineDetailPage({ params }: { params: Promise<{ id: strin
             </div>
           )}
 
-          {/* 인기 키워드 */}
-          {keywords.length > 0 && (
-            <div className="space-y-1.5">
-              <p className="text-xs text-muted-foreground">인기 키워드</p>
-              <div className="flex flex-wrap gap-1.5">
-                {keywords.map(({ keyword, count }) => (
-                  <span key={keyword}
-                    className="text-xs bg-primary/10 text-primary px-2.5 py-1 rounded-full font-medium">
-                    {keyword}
-                    {count > 1 && <span className="ml-1 opacity-60">×{count}</span>}
-                  </span>
+          {/* 카테고리별 키워드 시각화 */}
+          {(aromaKw.length > 0 || tasteKw.length > 0 || textureKw.length > 0) && (
+            <div className="space-y-3">
+              <p className="text-xs text-muted-foreground">키워드</p>
+              {([
+                { label: '향', items: aromaKw, color: 'bg-violet-400' },
+                { label: '맛', items: tasteKw, color: 'bg-primary' },
+                { label: '질감', items: textureKw, color: 'bg-amber-400' },
+              ] as { label: string; items: KeywordEntry[]; color: string }[])
+                .filter(({ items }) => items.length > 0)
+                .map(({ label, items, color }) => (
+                  <div key={label}>
+                    <p className="text-[11px] font-semibold text-muted-foreground mb-1.5">{label}</p>
+                    <div className="space-y-1.5">
+                      {items.map(({ keyword, count }) => (
+                        <div key={keyword} className="flex items-center gap-2">
+                          <span className="text-xs w-16 shrink-0 truncate text-right text-muted-foreground">{keyword}</span>
+                          <div className="flex-1 bg-muted rounded-full h-2 overflow-hidden">
+                            <div
+                              className={`h-full ${color} rounded-full transition-all`}
+                              style={{ width: `${(count / items[0].count) * 100}%` }}
+                            />
+                          </div>
+                          <span className="text-[11px] text-muted-foreground w-3 shrink-0">{count}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 ))}
-              </div>
             </div>
           )}
         </div>

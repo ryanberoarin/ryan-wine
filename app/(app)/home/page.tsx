@@ -22,6 +22,8 @@ export default function HomePage() {
   const [totalMembers, setTotalMembers] = useState(0)
   const [loading, setLoading] = useState(true)
   const [wineHighlights, setWineHighlights] = useState<WineHighlight[]>([])
+  type ClubStats = { totalWines: number; totalNotes: number; avgRating: number | null; topTypes: [string, number][]; topKw: [string, number][] }
+  const [clubStats, setClubStats] = useState<ClubStats | null>(null)
   // 관리자용
   const [activeCount, setActiveCount] = useState(0)
 
@@ -63,27 +65,43 @@ export default function HomePage() {
           .order('created_at', { ascending: false })
           .limit(20)
 
-        const highlights: WineHighlight[] = ((winesData ?? []) as any[])
-          .map((w) => {
-            const notes: TastingNote[] = w.tasting_notes ?? []
-            const rated = notes.filter((n: any) => n.rating)
-            const avgRating = rated.length > 0
-              ? rated.reduce((s: number, n: any) => s + n.rating, 0) / rated.length
-              : null
-            const kwFreq: Record<string, number> = {}
-            notes.forEach((n: any) => {
-              ;[...(n.aroma_keywords ?? []), ...(n.taste_keywords ?? [])].forEach((k: string) => {
-                kwFreq[k] = (kwFreq[k] ?? 0) + 1
-              })
+        const allWinesWithNotes = ((winesData ?? []) as any[]).map((w) => {
+          const notes: TastingNote[] = w.tasting_notes ?? []
+          const rated = notes.filter((n: any) => n.rating)
+          const avgRating = rated.length > 0
+            ? rated.reduce((s: number, n: any) => s + n.rating, 0) / rated.length
+            : null
+          const kwFreq: Record<string, number> = {}
+          notes.forEach((n: any) => {
+            ;[...(n.aroma_keywords ?? []), ...(n.taste_keywords ?? [])].forEach((k: string) => {
+              kwFreq[k] = (kwFreq[k] ?? 0) + 1
             })
-            const topKeyword = Object.entries(kwFreq).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null
-            return { ...w, avgRating, noteCount: notes.length, topKeyword }
           })
+          const topKeyword = Object.entries(kwFreq).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null
+          return { ...w, avgRating, noteCount: notes.length, topKeyword, kwFreq }
+        })
+
+        const highlights: WineHighlight[] = allWinesWithNotes
           .filter((w) => w.noteCount > 0)
           .sort((a, b) => (b.avgRating ?? 0) - (a.avgRating ?? 0))
           .slice(0, 4)
 
         setWineHighlights(highlights)
+
+        // 클럽 통계 집계
+        const allNotes = allWinesWithNotes.flatMap((w) => w.tasting_notes ?? []) as any[]
+        const ratedAll = allNotes.filter((n) => n.rating)
+        const typeFreq: Record<string, number> = {}
+        allWinesWithNotes.forEach((w) => { if (w.wine_type && w.noteCount > 0) typeFreq[w.wine_type] = (typeFreq[w.wine_type] ?? 0) + w.noteCount })
+        const kwFreqAll: Record<string, number> = {}
+        allWinesWithNotes.forEach((w) => Object.entries(w.kwFreq).forEach(([k, v]) => { kwFreqAll[k] = (kwFreqAll[k] ?? 0) + (v as number) }))
+        setClubStats({
+          totalWines: allWinesWithNotes.filter((w) => w.noteCount > 0).length,
+          totalNotes: allNotes.length,
+          avgRating: ratedAll.length > 0 ? ratedAll.reduce((s: number, n: any) => s + n.rating, 0) / ratedAll.length : null,
+          topTypes: Object.entries(typeFreq).sort((a, b) => b[1] - a[1]).slice(0, 3) as [string, number][],
+          topKw: Object.entries(kwFreqAll).sort((a, b) => b[1] - a[1]).slice(0, 6) as [string, number][],
+        })
       } finally {
         setLoading(false)
       }
@@ -185,6 +203,53 @@ export default function HomePage() {
             <div className="text-5xl">🍷</div>
             <p className="font-medium">아직 예정된 모임이 없어요</p>
             <p className="text-sm text-muted-foreground">다음 모임 공지를 기다려주세요</p>
+          </div>
+        )}
+
+        {/* 클럽 통계 */}
+        {clubStats && clubStats.totalWines > 0 && (
+          <div className="bg-card border border-border rounded-2xl p-4 space-y-4">
+            <p className="text-sm font-semibold">📊 동호회 통계</p>
+            <div className="grid grid-cols-3 gap-2 text-center">
+              <div>
+                <p className="text-xl font-bold text-primary">{clubStats.totalWines}</p>
+                <p className="text-[11px] text-muted-foreground">시음 와인</p>
+              </div>
+              <div>
+                <p className="text-xl font-bold text-primary">{clubStats.totalNotes}</p>
+                <p className="text-[11px] text-muted-foreground">시음평</p>
+              </div>
+              <div>
+                <p className="text-xl font-bold text-primary">{clubStats.avgRating ? `★${clubStats.avgRating.toFixed(1)}` : '-'}</p>
+                <p className="text-[11px] text-muted-foreground">평균 별점</p>
+              </div>
+            </div>
+            {clubStats.topTypes.length > 0 && (
+              <div className="space-y-1.5">
+                <p className="text-[11px] font-semibold text-muted-foreground">선호 타입</p>
+                {clubStats.topTypes.map(([type, count]) => (
+                  <div key={type} className="flex items-center gap-2">
+                    <span className="text-xs w-12 shrink-0 text-right text-muted-foreground">{wineTypeLabel[type] ?? type}</span>
+                    <div className="flex-1 bg-muted rounded-full h-1.5 overflow-hidden">
+                      <div className="h-full bg-primary rounded-full" style={{ width: `${(count / clubStats.topTypes[0][1]) * 100}%` }} />
+                    </div>
+                    <span className="text-[11px] text-muted-foreground w-3">{count}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {clubStats.topKw.length > 0 && (
+              <div className="space-y-1.5">
+                <p className="text-[11px] font-semibold text-muted-foreground">인기 키워드</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {clubStats.topKw.map(([kw, count]) => (
+                    <span key={kw} className="text-[11px] bg-primary/10 text-primary px-2 py-0.5 rounded-full">
+                      {kw} <span className="opacity-60">×{count}</span>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
