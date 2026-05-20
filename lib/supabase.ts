@@ -65,6 +65,7 @@ export type SessionRsvp = {
   session_id: string
   user_id: string
   status: 'attending' | 'not_attending'
+  attended_rounds: number[] | null
   created_at: string
   user?: User
 }

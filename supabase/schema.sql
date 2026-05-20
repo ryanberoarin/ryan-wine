@@ -74,3 +74,7 @@ ALTER TABLE tasting_notes DISABLE ROW LEVEL SECURITY;
 ALTER TABLE sessions DISABLE ROW LEVEL SECURITY;
 ALTER TABLE session_wines DISABLE ROW LEVEL SECURITY;
 ALTER TABLE messages DISABLE ROW LEVEL SECURITY;
+
+-- 차수별 참석 추적
+ALTER TABLE session_rsvps ADD COLUMN IF NOT EXISTS attended_rounds INTEGER[];
+-- NULL = 전체 참석 (기본값), 배열 = 참석한 차수 목록 (예: {1,2})

@@ -17,6 +17,7 @@ type WineHighlight = Wine & { avgRating: number | null; noteCount: number; topKe
 export default function HomePage() {
   const { user } = useUser()
   const [session, setSession] = useState<Session | null>(null)
+  const [nextSession, setNextSession] = useState<Session | null>(null)
   const [myRsvp, setMyRsvp] = useState<'attending' | 'not_attending' | null>(null)
   const [attendingCount, setAttendingCount] = useState(0)
   const [totalMembers, setTotalMembers] = useState(0)
@@ -37,10 +38,11 @@ export default function HomePage() {
           .select('*')
           .in('status', ['planning', 'active'])
           .order('scheduled_at', { ascending: true })
-          .limit(1)
+          .limit(2)
 
         const s = sessions?.[0] as Session | undefined
         setSession(s ?? null)
+        setNextSession((sessions?.[1] as Session | undefined) ?? null)
 
         if (s) {
           const [rsvpRes, allRsvpRes] = await Promise.all([
@@ -149,20 +151,25 @@ export default function HomePage() {
 
         {session ? (
           <div className="bg-card border border-border rounded-2xl p-5 space-y-4">
-            <div>
-              <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide mb-1">다가오는 모임</p>
-              <p className="font-bold text-lg text-primary">{session.title}</p>
-              {session.scheduled_at && (
-                <p className="text-sm text-muted-foreground mt-0.5">
-                  {new Date(session.scheduled_at).toLocaleDateString('ko-KR', {
-                    month: 'long', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit',
-                  })}
-                </p>
-              )}
-              {session.venue && (
-                <p className="text-sm text-muted-foreground">📍 {session.venue}</p>
-              )}
-            </div>
+            <Link href={`/sessions/${session.id}`} className="block -mx-1 px-1 rounded-xl">
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">다가오는 모임</p>
+                  <span className="text-xs text-primary font-medium">상세 →</span>
+                </div>
+                <p className="font-bold text-lg text-primary">{session.title}</p>
+                {session.scheduled_at && (
+                  <p className="text-sm text-muted-foreground mt-0.5">
+                    {new Date(session.scheduled_at).toLocaleDateString('ko-KR', {
+                      month: 'long', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit',
+                    })}
+                  </p>
+                )}
+                {session.venue && (
+                  <p className="text-sm text-muted-foreground">📍 {session.venue}</p>
+                )}
+              </div>
+            </Link>
 
             {deadline && (
               <p className={`text-xs font-medium ${isDeadlinePassed ? 'text-destructive' : dDiff! <= 3 ? 'text-amber-600' : 'text-muted-foreground'}`}>
@@ -203,6 +210,24 @@ export default function HomePage() {
             <div className="text-5xl">🍷</div>
             <p className="font-medium">아직 예정된 모임이 없어요</p>
             <p className="text-sm text-muted-foreground">다음 모임 공지를 기다려주세요</p>
+          </div>
+        )}
+
+        {nextSession && (
+          <div className="bg-muted/60 border border-border rounded-2xl p-4 space-y-1">
+            <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">다음 모임 예고</p>
+            <p className="font-semibold text-sm">{nextSession.title}</p>
+            {nextSession.scheduled_at && (
+              <p className="text-sm text-muted-foreground">
+                {new Date(nextSession.scheduled_at).toLocaleDateString('ko-KR', {
+                  month: 'long', day: 'numeric', weekday: 'short',
+                })}
+              </p>
+            )}
+            {nextSession.venue && (
+              <p className="text-sm text-muted-foreground">📍 {nextSession.venue}</p>
+            )}
+            <p className="text-xs text-muted-foreground/60 pt-0.5">투표는 아직 열리지 않았어요</p>
           </div>
         )}
 
@@ -334,6 +359,18 @@ export default function HomePage() {
           className="block bg-primary text-primary-foreground text-sm font-semibold text-center px-4 py-3 rounded-2xl">
           + 새 모임 만들기
         </Link>
+      )}
+
+      {nextSession && (
+        <div className="bg-muted/60 border border-border rounded-xl p-3 space-y-0.5">
+          <p className="text-xs text-muted-foreground font-medium">다음 모임 예고</p>
+          <p className="font-semibold text-sm">{nextSession.title}</p>
+          {nextSession.scheduled_at && (
+            <p className="text-xs text-muted-foreground">
+              {new Date(nextSession.scheduled_at).toLocaleDateString('ko-KR', { month: 'long', day: 'numeric', weekday: 'short' })}
+            </p>
+          )}
+        </div>
       )}
 
       {/* 지원금 현황 */}

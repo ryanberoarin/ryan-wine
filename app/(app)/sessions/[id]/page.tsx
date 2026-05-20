@@ -2,7 +2,7 @@
 
 import { useEffect, useState, use } from 'react'
 import Link from 'next/link'
-import { supabase, Session, SessionWine, SessionRsvp, CostItem, SessionPenalty } from '@/lib/supabase'
+import { supabase, Session, SessionWine, SessionRsvp, CostItem, SessionPenalty, User } from '@/lib/supabase'
 import { useUser } from '@/components/UserContext'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -56,6 +56,10 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
   const [editScheduledAt, setEditScheduledAt] = useState('')
   const [editRsvpDeadline, setEditRsvpDeadline] = useState('')
   const [savingEdit, setSavingEdit] = useState(false)
+  // 전체 멤버 (미투표자 표시용)
+  const [allMembers, setAllMembers] = useState<User[]>([])
+  // 차수별 참석 저장 중인 userId
+  const [savingRounds, setSavingRounds] = useState<string | null>(null)
   // 음용 순서
   type OrderItem = { session_wine_id: string; reason: string }
   const [recommending, setRecommending] = useState(false)
@@ -75,8 +79,12 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
     fetchRsvps()
     fetchCostItems()
     fetchPenalties()
-    supabase.from('users').select('*', { count: 'exact', head: true }).eq('is_active', true)
-      .then(({ count }) => setTotalActiveMembers(count ?? 0))
+    supabase.from('users').select('*').eq('is_active', true).order('nickname')
+      .then(({ data, count: _ }) => {
+        const members = (data as User[]) ?? []
+        setAllMembers(members)
+        setTotalActiveMembers(members.length)
+      })
   }, [id])
 
   useEffect(() => {
@@ -106,6 +114,23 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
       .from('session_penalties').select('*, user:users(nickname)')
       .eq('session_id', id).order('created_at')
     setPenalties((data as SessionPenalty[]) ?? [])
+  }
+
+  async function toggleRound(userId: string, round: number, currentRounds: number[] | null, allRounds: number[]) {
+    const base = currentRounds ?? allRounds
+    const newRounds = base.includes(round)
+      ? base.filter((r) => r !== round)
+      : [...base, round].sort((a, b) => a - b)
+    // 전체 차수 참석이면 null로 저장 (기본값)
+    const toStore = newRounds.length === allRounds.length ? null : newRounds
+    setSavingRounds(userId)
+    await supabase.from('session_rsvps')
+      .update({ attended_rounds: toStore })
+      .eq('session_id', id).eq('user_id', userId)
+    setRsvps((prev) => prev.map((r) =>
+      r.user_id === userId ? { ...r, attended_rounds: toStore } : r
+    ))
+    setSavingRounds(null)
   }
 
   function calcPenalty(scheduledAt: string | null): { amount: number; label: string } | null {
@@ -348,6 +373,9 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
   const attendingList = rsvps.filter((r) => r.status === 'attending')
   const notAttendingList = rsvps.filter((r) => r.status === 'not_attending')
   const attendingCount = attendingList.length
+  // 미투표자
+  const votedUserIds = new Set(rsvps.map((r) => r.user_id))
+  const unvotedMembers = allMembers.filter((m) => !votedUserIds.has(m.id))
   // 정산용: 미투표자도 불참 처리 (지원금 반액 적립)
   const notAttendingCount = Math.max(0, totalActiveMembers - attendingCount)
   const subsidyAttending = attendingCount * SUBSIDY_PER_PERSON
@@ -361,6 +389,24 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
   const selfPay = Math.max(0, totalCosts - totalSubsidy - totalPenalties)
   const perPerson = attendingCount > 0 ? Math.ceil(selfPay / attendingCount) : 0
   const myPenalty = penalties.find((p) => p.user_id === user?.id)
+  // 차수별 정산 계산
+  const hasRoundData = attendingList.some((r) => r.attended_rounds !== null && r.attended_rounds !== undefined)
+  const roundStats = rounds.map((r) => {
+    const roundCost = costItems.filter((c) => c.round_number === r).reduce((s, c) => s + c.amount, 0)
+    const roundSelfPay = totalCosts > 0 ? selfPay * (roundCost / totalCosts) : 0
+    const roundAttendees = attendingList.filter((rsvp) => {
+      const ar = rsvp.attended_rounds
+      return ar === null || ar === undefined || ar.includes(r)
+    })
+    const roundPerPerson = roundAttendees.length > 0 ? Math.ceil(roundSelfPay / roundAttendees.length) : 0
+    return { round: r, cost: roundCost, selfPay: roundSelfPay, attendees: roundAttendees, perPerson: roundPerPerson }
+  })
+  const getMemberShare = (userId: string) =>
+    roundStats.reduce((total, rs) => {
+      if (rs.attendees.some((r) => r.user_id === userId)) return total + rs.perPerson
+      return total
+    }, 0)
+  const myShare = user ? getMemberShare(user.id) : 0
 
   // RSVP 마감 계산
   const deadline = session?.rsvp_deadline ? new Date(session.rsvp_deadline) : null
@@ -444,11 +490,13 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
               ✕ 불참{isDeadlinePassed && myRsvp === 'attending' && calcPenalty(session.scheduled_at) ? ` (벌금 ${calcPenalty(session.scheduled_at)!.amount.toLocaleString()}원)` : ''}
             </button>
           </div>
-          {rsvps.length > 0 && (
-            <span className="text-xs text-muted-foreground">참석 {attendingCount}명 · 불참 {notAttendingList.length}명 / 전체 {totalActiveMembers}명</span>
+          {allMembers.length > 0 && (
+            <span className="text-xs text-muted-foreground">
+              참석 {attendingCount}명 · 불참 {notAttendingList.length}명 · 미투표 {unvotedMembers.length}명 / 전체 {totalActiveMembers}명
+            </span>
           )}
         </div>
-        {rsvps.length > 0 && (
+        {(rsvps.length > 0 || unvotedMembers.length > 0) && (
           <div className="flex flex-wrap gap-1.5 mt-2">
             {attendingList.map((r) => (
               <span key={r.id} className="text-[11px] bg-green-50 text-green-700 border border-green-200 px-2 py-0.5 rounded-full">
@@ -458,6 +506,11 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
             {notAttendingList.map((r) => (
               <span key={r.id} className="text-[11px] bg-muted text-muted-foreground border border-border px-2 py-0.5 rounded-full">
                 ✕ {(r as any).user?.nickname ?? '멤버'}
+              </span>
+            ))}
+            {unvotedMembers.map((m) => (
+              <span key={m.id} className="text-[11px] bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded-full">
+                ? {m.nickname}
               </span>
             ))}
           </div>
@@ -557,11 +610,29 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
                 )}
               </div>
 
-              {/* 1인당 */}
+              {/* 1인당 / 내 부담금 */}
               {attendingCount > 0 && (
                 <div className="bg-primary/5 border border-primary/20 rounded-xl p-4 text-center">
-                  <p className="text-xs text-muted-foreground">참석자 실 부담금 · 1인당</p>
-                  <p className="text-3xl font-bold text-primary mt-1">{perPerson.toLocaleString()}원</p>
+                  {hasRoundData && user ? (
+                    <>
+                      <p className="text-xs text-muted-foreground">내 부담금</p>
+                      <p className="text-3xl font-bold text-primary mt-1">{myShare.toLocaleString()}원</p>
+                      {roundStats.length > 1 && (
+                        <div className="mt-2 space-y-0.5">
+                          {roundStats.map((rs) => (
+                            <p key={rs.round} className="text-[11px] text-muted-foreground">
+                              {rs.round}차 ({rs.attendees.length}명): {rs.perPerson.toLocaleString()}원/인
+                            </p>
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-xs text-muted-foreground">참석자 실 부담금 · 1인당</p>
+                      <p className="text-3xl font-bold text-primary mt-1">{perPerson.toLocaleString()}원</p>
+                    </>
+                  )}
                 </div>
               )}
             </div>
@@ -705,7 +776,7 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
       {tab === 'settlement' && (
         <div className="flex-1 overflow-y-auto px-4 py-4 space-y-5">
           {/* 참석자 현황 */}
-          <div className="space-y-2">
+          <div className="space-y-3">
             <p className="text-sm font-semibold">참석자 현황</p>
             <div className="flex flex-wrap gap-2">
               {attendingList.map((r) => (
@@ -718,11 +789,55 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
                   ✕ {(r as any).user?.nickname ?? '멤버'}
                 </span>
               ))}
-              {rsvps.length === 0 && <p className="text-sm text-muted-foreground">아직 응답이 없어요</p>}
+              {unvotedMembers.map((m) => (
+                <span key={m.id} className="text-xs bg-amber-50 text-amber-700 border border-amber-200 px-2 py-1 rounded-full">
+                  ? {m.nickname}
+                </span>
+              ))}
+              {rsvps.length === 0 && unvotedMembers.length === 0 && (
+                <p className="text-sm text-muted-foreground">아직 응답이 없어요</p>
+              )}
             </div>
             <p className="text-xs text-muted-foreground">
-              참석 {attendingCount}명 · 불참(투표) {notAttendingList.length}명 · 미응답 {Math.max(0, totalActiveMembers - rsvps.length)}명 / 전체 {totalActiveMembers}명
+              참석 {attendingCount}명 · 불참 {notAttendingList.length}명 · 미투표 {unvotedMembers.length}명 / 전체 {totalActiveMembers}명
             </p>
+
+            {/* 차수별 참석 설정 */}
+            {attendingList.length > 0 && rounds.length > 0 && (
+              <div className="bg-muted/60 rounded-xl p-3 space-y-2">
+                <p className="text-xs font-semibold text-muted-foreground">차수별 참석 설정</p>
+                {attendingList.map((rsvp) => {
+                  const ar = rsvp.attended_rounds
+                  const attendedRounds = ar ?? rounds
+                  return (
+                    <div key={rsvp.id} className="flex items-center gap-2">
+                      <span className="text-xs font-medium w-16 shrink-0 truncate">{(rsvp as any).user?.nickname ?? '멤버'}</span>
+                      <div className="flex gap-1">
+                        {rounds.map((r) => (
+                          <button
+                            key={r}
+                            onClick={() => toggleRound(rsvp.user_id, r, ar, rounds)}
+                            disabled={savingRounds === rsvp.user_id}
+                            className={`text-xs px-2.5 py-1 rounded-full border font-medium transition-colors ${
+                              attendedRounds.includes(r)
+                                ? 'bg-green-500 text-white border-green-500'
+                                : 'bg-background text-muted-foreground border-border'
+                            } disabled:opacity-50`}
+                          >
+                            {r}차
+                          </button>
+                        ))}
+                      </div>
+                      {hasRoundData && (
+                        <span className="text-xs text-muted-foreground ml-auto shrink-0">
+                          {getMemberShare(rsvp.user_id).toLocaleString()}원
+                        </span>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
           </div>
 
           {/* 비용 항목 */}
@@ -853,14 +968,42 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
                   <span>실부담금</span><span>{selfPay.toLocaleString()}원</span>
                 </div>
               </div>
+              {/* 차수별 인당 비용 */}
+              {hasRoundData && roundStats.length > 1 && (
+                <div className="space-y-1 pt-2 border-t border-primary/20">
+                  <p className="text-xs font-semibold text-muted-foreground">차수별 인당 부담금</p>
+                  {roundStats.map((rs) => (
+                    <div key={rs.round} className="flex justify-between text-xs">
+                      <span className="text-muted-foreground">{rs.round}차 ({rs.attendees.length}명)</span>
+                      <span className="font-medium">{rs.perPerson.toLocaleString()}원/인</span>
+                    </div>
+                  ))}
+                </div>
+              )}
               {attendingCount > 0 && (
                 <div className="text-center pt-2 border-t border-primary/20">
-                  <p className="text-xs text-muted-foreground">1인당 ({attendingCount}명)</p>
-                  <p className="text-2xl font-bold text-primary">{perPerson.toLocaleString()}원</p>
-                  <p className="text-[10px] text-muted-foreground mt-0.5">
-                    수거 예상: {(perPerson * attendingCount).toLocaleString()}원
-                    {perPerson * attendingCount !== selfPay && ` (차액 +${(perPerson * attendingCount - selfPay).toLocaleString()}원 이월 처리)`}
-                  </p>
+                  {hasRoundData ? (
+                    <>
+                      <p className="text-xs text-muted-foreground">멤버별 부담금 (차수 기준)</p>
+                      <div className="mt-1.5 space-y-1">
+                        {attendingList.map((r) => (
+                          <div key={r.id} className="flex justify-between text-sm">
+                            <span className="font-medium">{(r as any).user?.nickname ?? '멤버'}</span>
+                            <span className="font-bold text-primary">{getMemberShare(r.user_id).toLocaleString()}원</span>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-xs text-muted-foreground">1인당 ({attendingCount}명)</p>
+                      <p className="text-2xl font-bold text-primary">{perPerson.toLocaleString()}원</p>
+                      <p className="text-[10px] text-muted-foreground mt-0.5">
+                        수거 예상: {(perPerson * attendingCount).toLocaleString()}원
+                        {perPerson * attendingCount !== selfPay && ` (차액 +${(perPerson * attendingCount - selfPay).toLocaleString()}원 이월 처리)`}
+                      </p>
+                    </>
+                  )}
                 </div>
               )}
               {/* 카톡 공지 복사 */}
@@ -874,7 +1017,10 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
                       const items = costItems.filter((c) => c.round_number === r)
                       return items.map((item) => `  · ${item.description || categoryLabel[item.category].replace(/^[^\s]+ /, '')} ${item.amount.toLocaleString()}원`).join('\n')
                     }).join('\n')
-                    const msg = [
+                    const settlementLines = hasRoundData
+                      ? roundStats.map((rs) => `  · ${rs.round}차 (${rs.attendees.length}명): ${rs.perPerson.toLocaleString()}원/인`).join('\n')
+                      : `  · 1인당 ${perPerson.toLocaleString()}원 (${attendingCount}명)`
+                  const msg = [
                       `🍷 ${session.title} 정산 안내`,
                       dateStr ? `📅 ${dateStr}` : '',
                       '',
@@ -887,7 +1033,8 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
                       `회사 지원금: ${totalSubsidy.toLocaleString()}원`,
                       `실 부담금: ${selfPay.toLocaleString()}원`,
                       '',
-                      `✅ 1인당 ${perPerson.toLocaleString()}원`,
+                      '✅ 정산',
+                      settlementLines,
                     ].filter((l) => l !== undefined).join('\n')
                     navigator.clipboard.writeText(msg)
                     alert('카톡 공지 문구가 복사됐어요!')
