@@ -612,7 +612,7 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
 
               {/* 1인당 / 내 부담금 */}
               {attendingCount > 0 && (
-                <div className="bg-primary/5 border border-primary/20 rounded-xl p-4 text-center">
+                <div className="bg-primary/5 border border-primary/20 rounded-xl p-4 text-center space-y-3">
                   {hasRoundData && user ? (
                     <>
                       <p className="text-xs text-muted-foreground">내 부담금</p>
@@ -633,6 +633,21 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
                       <p className="text-3xl font-bold text-primary mt-1">{perPerson.toLocaleString()}원</p>
                     </>
                   )}
+                  {(() => {
+                    const amount = hasRoundData && user ? myShare : perPerson
+                    const bank = process.env.NEXT_PUBLIC_TOSS_BANK
+                    const account = process.env.NEXT_PUBLIC_TOSS_ACCOUNT
+                    if (!bank || !account || amount <= 0) return null
+                    const tossUrl = `supertoss://send?amount=${amount}&bank=${bank}&accountNo=${account}&origin=와인클럽정산`
+                    return (
+                      <a
+                        href={tossUrl}
+                        className="block w-full bg-[#0064FF] text-white text-sm font-semibold py-3 rounded-xl text-center"
+                      >
+                        토스로 송금하기 · {amount.toLocaleString()}원
+                      </a>
+                    )
+                  })()}
                 </div>
               )}
             </div>
