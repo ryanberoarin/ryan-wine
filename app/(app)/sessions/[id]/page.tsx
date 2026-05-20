@@ -634,7 +634,9 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
                     </>
                   )}
                   {(() => {
-                    const amount = hasRoundData && user ? myShare : perPerson
+                    const isAttending = rsvps.some((r) => r.user_id === user?.id && r.status === 'attending')
+                    if (!isAttending) return null
+                    const amount = hasRoundData ? myShare : perPerson
                     const bank = process.env.NEXT_PUBLIC_TOSS_BANK
                     const account = process.env.NEXT_PUBLIC_TOSS_ACCOUNT
                     if (!bank || !account || amount <= 0) return null
