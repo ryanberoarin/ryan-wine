@@ -62,17 +62,39 @@ export async function GET(req: NextRequest) {
   const kstNow = new Date(now.getTime() + 9 * 3600000)
   const results: string[] = []
 
+  // ── 0. 매월 1일 지원금 스냅샷 ────────────────────────────────────
+  if (kstNow.getUTCDate() === 1) {
+    const snapYear = kstNow.getUTCFullYear()
+    const snapMonth = kstNow.getUTCMonth() + 1 // 1-12
+
+    const { data: eligibleUsers } = await supabase
+      .from('users')
+      .select('id', { count: 'exact' })
+      .eq('is_active', true)
+
+    const eligibleCount = eligibleUsers?.length ?? 0
+    const totalAmount = eligibleCount * 35000
+
+    const { error: snapError } = await supabase
+      .from('monthly_subsidy_snapshots')
+      .upsert({ year: snapYear, month: snapMonth, eligible_count: eligibleCount, total_amount: totalAmount },
+        { onConflict: 'year,month' })
+
+    if (!snapError) results.push(`snapshot: ${snapYear}-${snapMonth} (${eligibleCount}명, ${totalAmount.toLocaleString()}원)`)
+  }
+
   // ── 1. 정기 모임 자동 생성 ─────────────────────────────────────
-  // 이번 달과 다음 달의 두 번째 금요일 체크
-  for (let offset = 0; offset <= 1; offset++) {
+  // 이번 달 ~ 익익월의 두 번째 금요일 체크
+  for (let offset = 0; offset <= 2; offset++) {
     const targetMonth = kstNow.getUTCMonth() + offset
     const targetYear = kstNow.getUTCFullYear() + Math.floor((kstNow.getUTCMonth() + offset) / 12)
     const normalizedMonth = targetMonth % 12
 
     const meetingDate = getSecondFriday(targetYear, normalizedMonth)
 
-    // 오늘이 모임 21일 전인지 확인
-    if (!isKstDaysBefore(meetingDate, 21)) continue
+    // 익익월은 35일 전, 나머지는 21일 전에 생성
+    const triggerDays = offset === 2 ? 35 : 21
+    if (!isKstDaysBefore(meetingDate, triggerDays)) continue
 
     // 해당 월에 이미 세션이 있는지 확인
     const monthStart = new Date(Date.UTC(targetYear, normalizedMonth, 1)).toISOString()

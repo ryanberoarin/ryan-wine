@@ -11,6 +11,7 @@ export type User = {
   device_token: string
   is_admin: boolean
   is_active: boolean
+  subsidy_eligible: boolean
   created_at: string
 }
 

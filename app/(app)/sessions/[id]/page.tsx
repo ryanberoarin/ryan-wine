@@ -60,6 +60,8 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
   const [allMembers, setAllMembers] = useState<User[]>([])
   // 차수별 참석 저장 중인 userId
   const [savingRounds, setSavingRounds] = useState<string | null>(null)
+  // 카톡 리마인드 복사
+  const [reminderCopied, setReminderCopied] = useState(false)
   // 음용 순서
   type OrderItem = { session_wine_id: string; reason: string }
   const [recommending, setRecommending] = useState(false)
@@ -240,6 +242,26 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
     setEditScheduledAt(session!.scheduled_at ? toLocalDTInput(session!.scheduled_at) : '')
     setEditRsvpDeadline(session!.rsvp_deadline ? toLocalDTInput(session!.rsvp_deadline) : '')
     setShowEdit(true)
+  }
+
+  function copyKakaoReminder() {
+    if (!session) return
+    const d = session.scheduled_at ? new Date(session.scheduled_at) : null
+    const dateStr = d ? d.toLocaleDateString('ko-KR', { month: 'long', day: 'numeric', weekday: 'short' }) : ''
+    const timeStr = d ? d.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }) : ''
+    const attendingNames = attendingList.map((r) => (r as any).user?.nickname ?? '멤버').join(', ')
+    const lines = [
+      `🍷 ${session.title} 리마인드`,
+      '',
+      ...(dateStr ? [`📅 ${dateStr}${timeStr ? ` ${timeStr}` : ''}`] : []),
+      ...(session.venue ? [`📍 ${session.venue}`] : []),
+      '',
+      `✅ 참석 확정 (${attendingCount}명)`,
+      attendingNames || '(아직 없음)',
+    ]
+    navigator.clipboard.writeText(lines.join('\n'))
+    setReminderCopied(true)
+    setTimeout(() => setReminderCopied(false), 2000)
   }
 
   async function saveEdit() {
@@ -435,7 +457,12 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
         </div>
       </div>
       {user?.is_admin && !showEdit && (
-        <button onClick={openEdit} className="text-xs text-primary/60 mt-1">✏️ 모임 정보 수정</button>
+        <div className="flex items-center gap-3 mt-1">
+          <button onClick={openEdit} className="text-xs text-primary/60">✏️ 모임 정보 수정</button>
+          <button onClick={copyKakaoReminder} className={`text-xs font-medium px-2 py-0.5 rounded-full transition-colors ${reminderCopied ? 'bg-green-100 text-green-700' : 'bg-primary/10 text-primary'}`}>
+            {reminderCopied ? '✓ 복사됨!' : '📋 카톡 리마인드 복사'}
+          </button>
+        </div>
       )}
       {showEdit && (
         <div className="mt-3 space-y-2 bg-muted rounded-xl p-3">

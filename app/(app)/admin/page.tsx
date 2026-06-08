@@ -31,9 +31,15 @@ export default function AdminPage() {
     setMembers((prev) => prev.map((m) => m.id === memberId ? { ...m, is_active: !currentActive } : m))
   }
 
+  async function toggleSubsidyEligible(memberId: string, current: boolean) {
+    await supabase.from('users').update({ subsidy_eligible: !current }).eq('id', memberId)
+    setMembers((prev) => prev.map((m) => m.id === memberId ? { ...m, subsidy_eligible: !current } : m))
+  }
+
   if (!user?.is_admin) return null
 
-  const activeCount = members.filter((m) => m.is_active).length
+  const activeMembers = members.filter((m) => m.is_active)
+  const activeCount = activeMembers.length
   const inactiveCount = members.filter((m) => !m.is_active).length
   const monthlySubsidy = activeCount * 35000
 
@@ -68,8 +74,10 @@ export default function AdminPage() {
       {/* 지원금 정책 */}
       <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-xs space-y-1">
         <p className="font-semibold text-amber-800">지원금 정책 (인당 35,000원/월)</p>
+        <p className="text-amber-700">· 매월 1일 기준 활성 멤버 수로 확정 (복수가입자 개인 납부 포함)</p>
         <p className="text-amber-700">· 참석자 → 35,000원 전액 당월 적용</p>
         <p className="text-amber-700">· 미참석자 → 17,500원 당월 + 17,500원 익월 이월</p>
+        <p className="text-amber-700">· 복수가입자는 지원금 제외, 개인 직접 납부</p>
       </div>
 
       {/* 멤버 목록 */}
@@ -90,14 +98,23 @@ export default function AdminPage() {
                     {member.is_admin && (
                       <span className="text-xs bg-primary/10 text-primary px-1.5 py-0.5 rounded-full">관리자</span>
                     )}
+                    {!member.subsidy_eligible && (
+                      <span className="text-xs bg-orange-100 text-orange-600 px-1.5 py-0.5 rounded-full">복수가입</span>
+                    )}
                   </div>
                   <p className="text-xs text-muted-foreground">{new Date(member.created_at).toLocaleDateString('ko-KR')} 가입</p>
                 </div>
                 {member.id !== user.id && (
-                  <button onClick={() => toggleActive(member.id, member.is_active)}
-                    className="text-xs text-destructive border border-destructive/30 px-2 py-1 rounded-lg">
-                    탈퇴 처리
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => toggleSubsidyEligible(member.id, member.subsidy_eligible)}
+                      className={`text-xs px-2 py-1 rounded-lg border ${member.subsidy_eligible ? 'text-orange-600 border-orange-300' : 'text-green-600 border-green-300'}`}>
+                      {member.subsidy_eligible ? '복수가입 처리' : '지원금 복구'}
+                    </button>
+                    <button onClick={() => toggleActive(member.id, member.is_active)}
+                      className="text-xs text-destructive border border-destructive/30 px-2 py-1 rounded-lg">
+                      탈퇴 처리
+                    </button>
+                  </div>
                 )}
               </div>
             ))}
