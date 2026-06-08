@@ -244,6 +244,15 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
     setShowEdit(true)
   }
 
+  async function adminToggleRsvp(userId: string, currentStatus: 'attending' | 'not_attending' | null) {
+    const newStatus = currentStatus === 'attending' ? 'not_attending' : 'attending'
+    await supabase.from('session_rsvps').upsert(
+      { session_id: id, user_id: userId, status: newStatus },
+      { onConflict: 'session_id,user_id' }
+    )
+    fetchRsvps()
+  }
+
   function copyKakaoReminder() {
     if (!session) return
     const d = session.scheduled_at ? new Date(session.scheduled_at) : null
@@ -526,19 +535,25 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
         {(rsvps.length > 0 || unvotedMembers.length > 0) && (
           <div className="flex flex-wrap gap-1.5 mt-2">
             {attendingList.map((r) => (
-              <span key={r.id} className="text-[11px] bg-green-50 text-green-700 border border-green-200 px-2 py-0.5 rounded-full">
+              <button key={r.id}
+                onClick={() => user?.is_admin ? adminToggleRsvp(r.user_id, 'attending') : undefined}
+                className={`text-[11px] bg-green-50 text-green-700 border border-green-200 px-2 py-0.5 rounded-full ${user?.is_admin ? 'active:opacity-60' : ''}`}>
                 ✓ {(r as any).user?.nickname ?? '멤버'}
-              </span>
+              </button>
             ))}
             {notAttendingList.map((r) => (
-              <span key={r.id} className="text-[11px] bg-muted text-muted-foreground border border-border px-2 py-0.5 rounded-full">
+              <button key={r.id}
+                onClick={() => user?.is_admin ? adminToggleRsvp(r.user_id, 'not_attending') : undefined}
+                className={`text-[11px] bg-muted text-muted-foreground border border-border px-2 py-0.5 rounded-full ${user?.is_admin ? 'active:opacity-60' : ''}`}>
                 ✕ {(r as any).user?.nickname ?? '멤버'}
-              </span>
+              </button>
             ))}
             {unvotedMembers.map((m) => (
-              <span key={m.id} className="text-[11px] bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded-full">
+              <button key={m.id}
+                onClick={() => user?.is_admin ? adminToggleRsvp(m.id, null) : undefined}
+                className={`text-[11px] bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded-full ${user?.is_admin ? 'active:opacity-60' : ''}`}>
                 ? {m.nickname}
-              </span>
+              </button>
             ))}
           </div>
         )}
