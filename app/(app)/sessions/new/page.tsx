@@ -94,7 +94,7 @@ export default function NewSessionPage() {
       // 참석 투표 시작 알림 발송
       fetch('/api/push/send', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-device-token': user!.device_token },
         body: JSON.stringify({
           title: '🥂 새 모임 참석 투표가 시작됐어요!',
           body: `${data.title} 참석 여부를 알려주세요.${data.rsvp_deadline ? ` 마감: ${new Date(data.rsvp_deadline).toLocaleDateString('ko-KR', { month: 'long', day: 'numeric' })}` : ''}`,

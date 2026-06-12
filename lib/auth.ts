@@ -19,7 +19,6 @@ export async function login(
   inviteCode: string,
   adminPasscode?: string
 ): Promise<{ user: User }> {
-  const correctInvite = process.env.NEXT_PUBLIC_INVITE_CODE ?? 'naturalvin'
   const deviceToken = getOrCreateDeviceToken()
 
   // 관리자 로그인: 서버 API에서 passcode 검증 (클라이언트에 노출 안 됨)
@@ -53,20 +52,17 @@ export async function login(
     return { user: updated as User }
   }
 
-  // 3. 신규 가입: 초대코드 필요
-  if (inviteCode.trim().toLowerCase() !== correctInvite.toLowerCase()) {
-    throw new Error('초대 코드가 올바르지 않아요.')
-  }
-
-  const { data, error } = await supabase
-    .from('users')
-    .insert({ nickname: nickname.trim(), device_token: deviceToken, is_admin: false })
-    .select()
-    .single()
-
-  if (error) throw error
+  // 3. 신규 가입: 초대코드 서버에서 검증
+  const res = await fetch('/api/register', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ nickname: nickname.trim(), deviceToken, inviteCode: inviteCode.trim() }),
+  })
+  const json = await res.json()
+  if (!res.ok) throw new Error(json.error ?? '가입에 실패했어요.')
+  const data = json.user as User
   localStorage.setItem(USER_KEY, JSON.stringify(data))
-  return { user: data as User }
+  return { user: data }
 }
 
 export function logout() {

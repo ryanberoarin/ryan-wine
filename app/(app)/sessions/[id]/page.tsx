@@ -292,7 +292,7 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
     try {
       await fetch('/api/push/send', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-device-token': user!.device_token },
         body: JSON.stringify({
           title: `📣 참석 투표 마감 임박`,
           body: `${session?.title} 참석 여부를 아직 응답하지 않은 분들은 지금 바로 투표해주세요!`,
@@ -339,7 +339,7 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
     try {
       const res = await fetch('/api/recommend-order', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-device-token': user!.device_token },
         body: JSON.stringify({ sessionId: id }),
       })
       const json = await res.json()
@@ -389,7 +389,7 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
     try {
       const res = await fetch('/api/review', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-device-token': user!.device_token },
         body: JSON.stringify({ sessionId: id }),
       })
       const json = await res.json()

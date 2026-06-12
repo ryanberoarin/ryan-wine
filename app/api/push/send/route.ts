@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import webpush from 'web-push'
 import { createClient } from '@supabase/supabase-js'
+import { getAuthUser } from '@/lib/api-auth'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -14,6 +15,10 @@ webpush.setVapidDetails(
 )
 
 export async function POST(req: NextRequest) {
+  const user = await getAuthUser(req)
+  if (!user) return NextResponse.json({ error: '로그인이 필요해요.' }, { status: 401 })
+  if (!user.is_admin) return NextResponse.json({ error: '관리자만 사용할 수 있어요.' }, { status: 403 })
+
   try {
     const { title, body, url } = await req.json()
 

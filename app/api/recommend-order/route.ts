@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { GoogleGenAI } from '@google/genai'
 import { createClient } from '@supabase/supabase-js'
+import { getAuthUser } from '@/lib/api-auth'
 
 const genai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! })
 const supabase = createClient(
@@ -9,6 +10,10 @@ const supabase = createClient(
 )
 
 export async function POST(req: NextRequest) {
+  const user = await getAuthUser(req)
+  if (!user) return NextResponse.json({ error: '로그인이 필요해요.' }, { status: 401 })
+  if (!user.is_admin) return NextResponse.json({ error: '관리자만 사용할 수 있어요.' }, { status: 403 })
+
   try {
     const { sessionId } = await req.json()
 

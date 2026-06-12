@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { GoogleGenAI } from '@google/genai'
+import { getAuthUser } from '@/lib/api-auth'
 
 const genai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! })
 
@@ -38,6 +39,10 @@ const PROMPT = `당신은 전문 소믈리에이자 와인 라벨 판독 전문�
 }`
 
 export async function POST(req: NextRequest) {
+  const user = await getAuthUser(req)
+  if (!user) return NextResponse.json({ error: '로그인이 필요해요.' }, { status: 401 })
+  if (!user.is_admin) return NextResponse.json({ error: '관리자만 사용할 수 있어요.' }, { status: 403 })
+
   try {
     const { imageBase64, mediaType } = await req.json()
 
@@ -56,13 +61,11 @@ export async function POST(req: NextRequest) {
     })
 
     const raw = response.text ?? ''
-    // 마크다운 코드블록, 앞뒤 공백 제거
     const cleaned = raw
       .replace(/^```(?:json)?\s*/m, '')
       .replace(/\s*```\s*$/m, '')
       .trim()
 
-    // JSON 파싱 실패 시 {} 내부만 추출 시도
     let wineData: Record<string, unknown>
     try {
       wineData = JSON.parse(cleaned)
@@ -72,13 +75,11 @@ export async function POST(req: NextRequest) {
       wineData = JSON.parse(match[0])
     }
 
-    // vintage 타입 보정 (문자열로 왔을 경우)
     if (typeof wineData.vintage === 'string') {
       const parsed = parseInt(wineData.vintage as string)
       wineData.vintage = isNaN(parsed) ? null : parsed
     }
 
-    // grape_varieties 배열 보정
     if (!Array.isArray(wineData.grape_varieties)) {
       wineData.grape_varieties = []
     }
