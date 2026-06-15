@@ -1,8 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { GoogleGenAI } from '@google/genai'
+import Anthropic from '@anthropic-ai/sdk'
 import { getAuthUser } from '@/lib/api-auth'
+import { allow, retryAfterSeconds } from '@/lib/rate-limit'
 
-const genai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! })
+export const maxDuration = 30
+
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024 // 5 MB (base64 문자열 기준)
+
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
 const PROMPT = `당신은 전문 소믈리에이자 와인 라벨 판독 전문가입니다.
 제공된 이미지의 와인 라벨을 면밀히 분석하여 아래 JSON 형식으로만 응답하세요.
@@ -43,6 +48,14 @@ export async function POST(req: NextRequest) {
   if (!user) return NextResponse.json({ error: '로그인이 필요해요.' }, { status: 401 })
   if (!user.is_admin) return NextResponse.json({ error: '관리자만 사용할 수 있어요.' }, { status: 403 })
 
+  if (!allow(`scan:${user.id}`, 20, 60 * 60 * 1000)) {
+    const retry = retryAfterSeconds(`scan:${user.id}`)
+    return NextResponse.json(
+      { success: false, error: `1시간에 20회까지 스캔할 수 있어요. ${retry}초 후 다시 시도해주세요.` },
+      { status: 429 }
+    )
+  }
+
   try {
     const { imageBase64, mediaType } = await req.json()
 
@@ -50,17 +63,30 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: '이미지 데이터가 없어요.' }, { status: 400 })
     }
 
-    const response = await genai.models.generateContent({
-      model: 'gemini-2.0-flash',
-      contents: [{
-        parts: [
-          { inlineData: { mimeType: mediaType, data: imageBase64 } },
-          { text: PROMPT },
+    if (imageBase64.length > MAX_IMAGE_BYTES) {
+      return NextResponse.json({ success: false, error: '이미지 크기가 너무 커요. (최대 5MB)' }, { status: 413 })
+    }
+
+    const response = await anthropic.messages.create({
+      model: 'claude-haiku-4-5',
+      max_tokens: 1024,
+      messages: [{
+        role: 'user',
+        content: [
+          {
+            type: 'image',
+            source: {
+              type: 'base64',
+              media_type: mediaType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
+              data: imageBase64,
+            },
+          },
+          { type: 'text', text: PROMPT },
         ],
       }],
     })
 
-    const raw = response.text ?? ''
+    const raw = response.content[0].type === 'text' ? response.content[0].text : ''
     const cleaned = raw
       .replace(/^```(?:json)?\s*/m, '')
       .replace(/\s*```\s*$/m, '')

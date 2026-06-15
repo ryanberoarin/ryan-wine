@@ -43,6 +43,11 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
   const [savingCarryover, setSavingCarryover] = useState(false)
   // 벌금
   const [penalties, setPenalties] = useState<SessionPenalty[]>([])
+  const [showAddPenalty, setShowAddPenalty] = useState(false)
+  const [newPenaltyUserId, setNewPenaltyUserId] = useState('')
+  const [newPenaltyAmount, setNewPenaltyAmount] = useState('')
+  const [newPenaltyReason, setNewPenaltyReason] = useState('D-day')
+  const [addingPenalty, setAddingPenalty] = useState(false)
   // 정산 공개
   const [publishingSettlement, setPublishingSettlement] = useState(false)
   // 후기 생성
@@ -69,6 +74,8 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
   const [orderMode, setOrderMode] = useState(false)
   const [localOrder, setLocalOrder] = useState<SessionWine[]>([])
   const [savingOrder, setSavingOrder] = useState(false)
+  // 계좌 정보 (서버에서 안전하게 조회)
+  const [paymentInfo, setPaymentInfo] = useState<{ bank: string; account: string } | null>(null)
 
   useEffect(() => {
     supabase.from('sessions').select('*').eq('id', id).single()
@@ -87,6 +94,10 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
         setAllMembers(members)
         setTotalActiveMembers(members.length)
       })
+    const deviceToken = localStorage.getItem('wine_club_device_token') ?? ''
+    fetch('/api/payment-info', { headers: { 'x-device-token': deviceToken } })
+      .then((r) => r.ok ? r.json() : null)
+      .then((json) => { if (json) setPaymentInfo({ bank: json.bank, account: json.account }) })
   }, [id])
 
   useEffect(() => {
@@ -118,6 +129,30 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
     setPenalties((data as SessionPenalty[]) ?? [])
   }
 
+  async function deletePenaltyById(penaltyId: string) {
+    await supabase.from('session_penalties').delete().eq('id', penaltyId)
+    setPenalties(prev => prev.filter(p => p.id !== penaltyId))
+  }
+
+  async function addManualPenalty() {
+    if (!newPenaltyUserId || !newPenaltyAmount) return
+    const amount = parseInt(newPenaltyAmount.replace(/,/g, ''))
+    if (isNaN(amount) || amount <= 0) return
+    setAddingPenalty(true)
+    await supabase.from('session_penalties').insert({
+      session_id: id,
+      user_id: newPenaltyUserId,
+      amount,
+      reason: newPenaltyReason,
+    })
+    await fetchPenalties()
+    setNewPenaltyUserId('')
+    setNewPenaltyAmount('')
+    setNewPenaltyReason('D-day')
+    setShowAddPenalty(false)
+    setAddingPenalty(false)
+  }
+
   async function toggleRound(userId: string, round: number, currentRounds: number[] | null, allRounds: number[]) {
     const base = currentRounds ?? allRounds
     const newRounds = base.includes(round)
@@ -137,10 +172,14 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
 
   function calcPenalty(scheduledAt: string | null): { amount: number; label: string } | null {
     if (!scheduledAt) return null
-    const daysUntil = Math.ceil((new Date(scheduledAt).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
-    if (daysUntil <= 0) return { amount: 20000, label: 'D-day' }
-    if (daysUntil === 1) return { amount: 10000, label: 'D-1' }
-    if (daysUntil <= 7) return { amount: 5000, label: `D-${daysUntil}` }
+    const now = new Date()
+    const event = new Date(scheduledAt)
+    const nowDay = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+    const eventDay = new Date(event.getFullYear(), event.getMonth(), event.getDate())
+    const diffDays = Math.round((eventDay.getTime() - nowDay.getTime()) / (1000 * 60 * 60 * 24))
+    if (diffDays <= 0) return { amount: 20000, label: 'D-day' }
+    if (diffDays === 1) return { amount: 10000, label: 'D-1' }
+    if (diffDays <= 7) return { amount: 5000, label: `D-${diffDays}` }
     return null
   }
 
@@ -374,7 +413,7 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
     setSavingOrder(true)
     await Promise.all(
       localOrder.map((sw, i) =>
-        supabase.from('session_wines').update({ order_index: i }).eq('id', sw.id)
+        supabase.from('session_wines').update({ order_index: i + 1 }).eq('id', sw.id)
       )
     )
     setWines(localOrder)
@@ -579,26 +618,40 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
             </div>
           ) : (
             <>
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">이번 모임 와인</p>
-              {wines.map((sw) => (
-                <div key={sw.id} className="bg-card border border-border rounded-xl p-3 space-y-2">
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <p className="font-medium text-sm">{sw.wine?.name ?? '이름 없음'}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {[sw.wine?.producer, sw.wine?.region, sw.wine?.vintage ? `${sw.wine.vintage}년` : null].filter(Boolean).join(' · ')}
-                      </p>
-                    </div>
-                    <Badge variant={sw.status === 'confirmed' ? 'default' : 'secondary'} className="text-xs shrink-0">
-                      {sw.status === 'confirmed' ? '확정' : '제안'}
-                    </Badge>
-                  </div>
-                  <Link href={`/notes/new?wine_id=${sw.wine_id}&session_id=${id}`}
-                    className="inline-block text-xs text-primary font-medium">
-                    ✏️ 시음평 쓰기
-                  </Link>
-                </div>
-              ))}
+              {(() => {
+                const hasOrder = wines.some(sw => ((sw as any).order_index ?? 0) > 0)
+                return (
+                  <>
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                      {hasOrder ? '✨ 오늘의 시음 순서' : '이번 모임 와인'}
+                    </p>
+                    {wines.map((sw, i) => (
+                      <div key={sw.id} className="bg-card border border-border rounded-xl p-3 space-y-2">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex items-start gap-2">
+                            {hasOrder && (
+                              <span className="text-lg font-bold text-primary/40 w-5 mt-0.5 shrink-0">{i + 1}</span>
+                            )}
+                            <div>
+                              <p className="font-medium text-sm">{sw.wine?.name ?? '이름 없음'}</p>
+                              <p className="text-xs text-muted-foreground">
+                                {[sw.wine?.producer, sw.wine?.region, sw.wine?.vintage ? `${sw.wine.vintage}년` : null].filter(Boolean).join(' · ')}
+                              </p>
+                            </div>
+                          </div>
+                          <Badge variant={sw.status === 'confirmed' ? 'default' : 'secondary'} className="text-xs shrink-0">
+                            {sw.status === 'confirmed' ? '확정' : '제안'}
+                          </Badge>
+                        </div>
+                        <Link href={`/notes/new?wine_id=${sw.wine_id}&session_id=${id}`}
+                          className="inline-block text-xs text-primary font-medium">
+                          ✏️ 시음평 쓰기
+                        </Link>
+                      </div>
+                    ))}
+                  </>
+                )
+              })()}
             </>
           )}
 
@@ -679,8 +732,8 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
                     const isAttending = rsvps.some((r) => r.user_id === user?.id && r.status === 'attending')
                     if (!isAttending) return null
                     const amount = hasRoundData ? myShare : perPerson
-                    const bank = process.env.NEXT_PUBLIC_TOSS_BANK
-                    const account = process.env.NEXT_PUBLIC_TOSS_ACCOUNT
+                    const bank = paymentInfo?.bank
+                    const account = paymentInfo?.account
                     if (!bank || !account || amount <= 0) return null
                     const tossUrl = `supertoss://send?amount=${amount}&bank=${bank}&accountNo=${account}&origin=와인클럽정산`
                     return (
@@ -820,6 +873,7 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
                 </div>
                 <div className="flex gap-3">
                   <Link href={`/notes/new?wine_id=${sw.wine_id}&session_id=${id}`} className="text-xs text-primary font-medium">시음평 쓰기</Link>
+                  <Link href={`/wines/${sw.wine_id}`} className="text-xs text-muted-foreground font-medium">정보 수정</Link>
                   {sw.status !== 'confirmed' && (
                     <button onClick={() => confirmWine(sw.id)} className="text-xs text-green-600 font-medium">확정</button>
                   )}
@@ -985,16 +1039,61 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
           </div>
 
           {/* 벌금 내역 */}
-          {penalties.length > 0 && (
-            <div className="space-y-2">
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
               <p className="text-sm font-semibold">⚠️ 벌금 내역</p>
+              <button onClick={() => setShowAddPenalty(!showAddPenalty)} className="text-xs text-primary font-medium">+ 수동 추가</button>
+            </div>
+            {showAddPenalty && (
+              <div className="bg-muted rounded-xl p-3 space-y-2">
+                <select
+                  value={newPenaltyUserId}
+                  onChange={(e) => setNewPenaltyUserId(e.target.value)}
+                  className="w-full text-sm border border-border rounded-lg px-3 py-2 bg-background"
+                >
+                  <option value="">멤버 선택</option>
+                  {allMembers.map(m => (
+                    <option key={m.id} value={m.id}>{m.nickname}</option>
+                  ))}
+                </select>
+                <div className="flex gap-2">
+                  <select
+                    value={newPenaltyReason}
+                    onChange={(e) => setNewPenaltyReason(e.target.value)}
+                    className="text-sm border border-border rounded-lg px-3 py-2 bg-background"
+                  >
+                    <option value="D-day">D-day (2만원)</option>
+                    <option value="D-1">D-1 (1만원)</option>
+                    <option value="기타">기타</option>
+                  </select>
+                  <input
+                    type="number"
+                    placeholder="금액"
+                    value={newPenaltyAmount}
+                    onChange={(e) => setNewPenaltyAmount(e.target.value)}
+                    className="flex-1 text-sm border border-border rounded-lg px-3 py-2 bg-background"
+                  />
+                </div>
+                <button
+                  onClick={addManualPenalty}
+                  disabled={!newPenaltyUserId || !newPenaltyAmount || addingPenalty}
+                  className="w-full bg-destructive text-white text-sm font-medium py-2 rounded-xl disabled:opacity-50"
+                >
+                  {addingPenalty ? '추가 중...' : '벌금 추가'}
+                </button>
+              </div>
+            )}
+            {penalties.length > 0 && (
               <div className="bg-destructive/5 border border-destructive/20 rounded-xl p-3 space-y-1.5 text-xs">
                 {penalties.map((p) => (
-                  <div key={p.id} className="flex justify-between">
+                  <div key={p.id} className="flex items-center justify-between">
                     <span className="text-muted-foreground">
                       {(p as any).user?.nickname ?? '멤버'} · {p.reason} 취소
                     </span>
-                    <span className="text-destructive font-medium">- {p.amount.toLocaleString()}원</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-destructive font-medium">- {p.amount.toLocaleString()}원</span>
+                      <button onClick={() => deletePenaltyById(p.id)} className="text-muted-foreground hover:text-destructive text-xs">✕</button>
+                    </div>
                   </div>
                 ))}
                 <div className="flex justify-between font-semibold border-t border-destructive/20 pt-1.5 mt-1">
@@ -1002,8 +1101,8 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
                   <span className="text-destructive">- {totalPenalties.toLocaleString()}원</span>
                 </div>
               </div>
-            </div>
-          )}
+            )}
+          </div>
 
           {/* 최종 정산 */}
           {totalCosts > 0 && (

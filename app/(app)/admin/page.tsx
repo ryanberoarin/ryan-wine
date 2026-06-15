@@ -12,11 +12,24 @@ export default function AdminPage() {
   const router = useRouter()
   const [members, setMembers] = useState<User[]>([])
   const [loading, setLoading] = useState(true)
+  const [inviteCode, setInviteCode] = useState('')
 
   useEffect(() => {
     if (user && !user.is_admin) { router.push('/home'); return }
     fetchMembers()
+    fetchInviteCode()
   }, [user, router])
+
+  async function fetchInviteCode() {
+    const deviceToken = localStorage.getItem('wine_club_device_token') ?? ''
+    const res = await fetch('/api/admin-config', {
+      headers: { 'x-device-token': deviceToken },
+    })
+    if (res.ok) {
+      const json = await res.json()
+      setInviteCode(json.inviteCode)
+    }
+  }
 
   async function fetchMembers() {
     const { data } = await supabase.from('users').select('*')
@@ -54,7 +67,7 @@ export default function AdminPage() {
       <div className="bg-card border border-border rounded-xl p-4 space-y-1">
         <p className="text-xs text-muted-foreground">초대 코드</p>
         <p className="text-2xl font-mono font-bold text-primary tracking-widest">
-          {process.env.NEXT_PUBLIC_INVITE_CODE ?? 'naturalvin'}
+          {inviteCode || '···'}
         </p>
         <p className="text-xs text-muted-foreground">새 멤버에게 이 코드를 공유하세요</p>
       </div>

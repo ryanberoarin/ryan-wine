@@ -7,7 +7,7 @@ const supabase = createClient(
 )
 
 export async function POST(req: NextRequest) {
-  const { nickname, deviceToken } = await req.json()
+  const { nickname, deviceToken, inviteCode } = await req.json()
 
   if (!nickname?.trim() || !deviceToken) {
     return NextResponse.json({ error: '닉네임과 기기 정보가 필요해요.' }, { status: 400 })
@@ -21,6 +21,15 @@ export async function POST(req: NextRequest) {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   if (!user) return NextResponse.json({ error: 'not_found' }, { status: 404 })
+
+  // 기기 변경(device_token 교체)은 초대코드 재검증 필요 — 닉네임만 알면 탈취 가능한 취약점 방어
+  const correctInvite = process.env.INVITE_CODE ?? 'naturalvin'
+  if (!inviteCode || inviteCode.trim().toLowerCase() !== correctInvite.toLowerCase()) {
+    return NextResponse.json(
+      { error: '새 기기 인증을 위해 초대 코드가 필요해요.' },
+      { status: 403 }
+    )
+  }
 
   const { data: updated, error: updateError } = await supabase
     .from('users')

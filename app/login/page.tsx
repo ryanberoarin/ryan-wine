@@ -93,7 +93,7 @@ export default function LoginPage() {
               {loading ? '입장 중...' : '입장하기'}
             </Button>
             <p className="text-xs text-center text-muted-foreground">
-              이전에 가입했다면 이름만 입력해도 바로 들어올 수 있어요
+              같은 기기라면 이름만으로, 새 기기라면 초대 코드도 필요해요
             </p>
           </form>
         )}

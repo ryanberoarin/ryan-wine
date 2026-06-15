@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { GoogleGenAI } from '@google/genai'
+import Anthropic from '@anthropic-ai/sdk'
 import { createClient } from '@supabase/supabase-js'
 import { getAuthUser } from '@/lib/api-auth'
+import { allow, retryAfterSeconds } from '@/lib/rate-limit'
 
-const genai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! })
+export const maxDuration = 30
+
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -13,6 +16,14 @@ export async function POST(req: NextRequest) {
   const user = await getAuthUser(req)
   if (!user) return NextResponse.json({ error: '로그인이 필요해요.' }, { status: 401 })
   if (!user.is_admin) return NextResponse.json({ error: '관리자만 사용할 수 있어요.' }, { status: 403 })
+
+  if (!allow(`recommend:${user.id}`, 10, 60 * 60 * 1000)) {
+    const retry = retryAfterSeconds(`recommend:${user.id}`)
+    return NextResponse.json(
+      { success: false, error: `1시간에 10회까지 추천할 수 있어요. ${retry}초 후 다시 시도해주세요.` },
+      { status: 429 }
+    )
+  }
 
   try {
     const { sessionId } = await req.json()
@@ -66,12 +77,13 @@ ${wineList.map((w, i) => [
 
 반드시 위 목록의 모든 와인을 포함하고, session_wine_id는 정확히 입력받은 값 그대로 사용해.`
 
-    const response = await genai.models.generateContent({
-      model: 'gemini-2.0-flash',
-      contents: [{ parts: [{ text: prompt }] }],
+    const response = await anthropic.messages.create({
+      model: 'claude-haiku-4-5',
+      max_tokens: 1024,
+      messages: [{ role: 'user', content: prompt }],
     })
 
-    const text = response.text ?? ''
+    const text = response.content[0].type === 'text' ? response.content[0].text : ''
     const jsonMatch = text.match(/\{[\s\S]*\}/)
     if (!jsonMatch) throw new Error('JSON 파싱 실패')
 
