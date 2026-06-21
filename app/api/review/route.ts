@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { GoogleGenAI } from '@google/genai'
+import Anthropic from '@anthropic-ai/sdk'
 import { createClient } from '@supabase/supabase-js'
 import { getAuthUser } from '@/lib/api-auth'
 
-const genai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! })
+export const maxDuration = 30
+
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -82,12 +84,14 @@ ${memos || '없음'}
 - 다음 모임 기대감으로 마무리
 - 300~400자 분량`
 
-    const response = await genai.models.generateContent({
-      model: 'gemini-2.0-flash',
-      contents: [{ parts: [{ text: prompt }] }],
+    const response = await anthropic.messages.create({
+      model: 'claude-haiku-4-5',
+      max_tokens: 1024,
+      messages: [{ role: 'user', content: prompt }],
     })
 
-    return NextResponse.json({ success: true, review: response.text ?? '' })
+    const review = response.content[0].type === 'text' ? response.content[0].text : ''
+    return NextResponse.json({ success: true, review })
   } catch (err: any) {
     console.error('review error:', err)
     return NextResponse.json({ success: false, error: err?.message }, { status: 500 })

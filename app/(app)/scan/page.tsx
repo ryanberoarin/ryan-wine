@@ -95,6 +95,7 @@ function ScanContent() {
   const [batchScanning, setBatchScanning] = useState(false)
   const [batchSaving, setBatchSaving] = useState(false)
   const [batchSaved, setBatchSaved] = useState(false)
+  const [expandedId, setExpandedId] = useState<string | null>(null)
 
   if (user && !user.is_admin) {
     router.replace('/home')
@@ -312,8 +313,17 @@ function ScanContent() {
     setBatchScanning(false)
     setBatchSaving(false)
     setBatchSaved(false)
+    setExpandedId(null)
     setError('')
     if (galleryRef.current) galleryRef.current.value = ''
+  }
+
+  function updateBatchItem(itemId: string, patch: Partial<WineData>) {
+    setBatchItems(prev => prev.map(it =>
+      it.id === itemId && it.wineData
+        ? { ...it, wineData: { ...it.wineData, ...patch } }
+        : it
+    ))
   }
 
   const doneCount = batchItems.filter(it => it.status === 'done').length
@@ -352,62 +362,158 @@ function ScanContent() {
             )}
           </div>
 
-          <div className="grid grid-cols-2 gap-2">
-            {batchItems.map(item => (
-              <div
-                key={item.id}
-                className="relative rounded-xl overflow-hidden bg-muted"
-                style={{ aspectRatio: '3/4' }}
-              >
-                <img src={item.preview} alt="" className="w-full h-full object-cover" />
-                <div className="absolute inset-0 bg-black/50 flex flex-col items-center justify-center p-2">
-                  {item.status === 'queued' && (
-                    <span className="text-white/60 text-xs">대기중</span>
-                  )}
-                  {item.status === 'scanning' && (
-                    <span className="text-2xl animate-pulse">🍷</span>
-                  )}
-                  {item.status === 'done' && (
-                    <>
-                      <span className="text-xl">✅</span>
-                      <p className="text-white text-xs font-medium text-center mt-1 line-clamp-2">
-                        {item.wineData?.name ?? '분석완료'}
-                      </p>
-                    </>
-                  )}
-                  {item.status === 'error' && (
-                    <>
-                      <span className="text-xl">❌</span>
-                      <p className="text-red-300 text-xs text-center mt-1">인식 실패</p>
-                    </>
-                  )}
+          {/* 대기 중: 그리드 미리보기 */}
+          {batchItems.every(it => it.status === 'queued') && (
+            <div className="grid grid-cols-2 gap-2">
+              {batchItems.map(item => (
+                <div key={item.id} className="rounded-xl overflow-hidden bg-muted" style={{ aspectRatio: '3/4' }}>
+                  <img src={item.preview} alt="" className="w-full h-full object-cover" />
                 </div>
-              </div>
-            ))}
-          </div>
-
-          {/* Batch: start scan */}
-          {!batchScanning && !batchSaved && batchItems.every(it => it.status === 'queued') && (
-            <Button onClick={handleBatchScan} className="w-full">
-              라벨 분석 시작
-            </Button>
+              ))}
+            </div>
           )}
 
-          {/* Batch: scanning progress */}
+          {/* 스캔 중: 상태 오버레이 그리드 */}
+          {batchScanning && (
+            <div className="grid grid-cols-2 gap-2">
+              {batchItems.map(item => (
+                <div key={item.id} className="relative rounded-xl overflow-hidden bg-muted" style={{ aspectRatio: '3/4' }}>
+                  <img src={item.preview} alt="" className="w-full h-full object-cover" />
+                  <div className="absolute inset-0 bg-black/50 flex flex-col items-center justify-center p-2">
+                    {item.status === 'queued' && <span className="text-white/60 text-xs">대기중</span>}
+                    {item.status === 'scanning' && <span className="text-2xl animate-pulse">🍷</span>}
+                    {item.status === 'done' && <span className="text-xl">✅</span>}
+                    {item.status === 'error' && <span className="text-xl">❌</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* 스캔 완료: 결과 목록 + 수정 */}
+          {!batchScanning && !batchSaved && !batchItems.every(it => it.status === 'queued') && (
+            <div className="space-y-2">
+              {batchItems.map(item => (
+                <div key={item.id} className="bg-card border border-border rounded-xl overflow-hidden">
+                  <div className="flex items-center gap-3 p-3">
+                    <img
+                      src={item.preview}
+                      alt=""
+                      className="w-14 rounded-lg shrink-0 object-cover"
+                      style={{ height: '74px', objectPosition: 'center' }}
+                    />
+                    <div className="flex-1 min-w-0">
+                      {item.status === 'done' && item.wineData ? (
+                        <>
+                          <p className="font-medium text-sm truncate">{item.wineData.name ?? '이름 미확인'}</p>
+                          <p className="text-xs text-muted-foreground truncate">
+                            {[item.wineData.producer, item.wineData.region, item.wineData.vintage ? `${item.wineData.vintage}년` : null].filter(Boolean).join(' · ')}
+                          </p>
+                          {item.wineData.grape_varieties.length > 0 && (
+                            <p className="text-xs text-muted-foreground truncate">{item.wineData.grape_varieties.join(', ')}</p>
+                          )}
+                        </>
+                      ) : (
+                        <p className="text-sm text-destructive">인식 실패</p>
+                      )}
+                    </div>
+                    {item.status === 'done' && (
+                      <button
+                        onClick={() => setExpandedId(expandedId === item.id ? null : item.id)}
+                        className="text-xs text-primary font-medium shrink-0 px-2.5 py-1.5 rounded-lg bg-primary/10"
+                      >
+                        {expandedId === item.id ? '접기' : '수정'}
+                      </button>
+                    )}
+                  </div>
+
+                  {expandedId === item.id && item.wineData && (
+                    <div className="border-t border-border bg-muted/30 p-3 space-y-2">
+                      <div className="flex gap-1.5 flex-wrap">
+                        {(['red', 'white', 'orange', 'rose', 'sparkling', 'other'] as const).map(type => {
+                          const labels: Record<string, string> = { red: '레드', white: '화이트', orange: '오렌지', rose: '로제', sparkling: '스파클링', other: '기타' }
+                          return (
+                            <button
+                              key={type}
+                              onClick={() => updateBatchItem(item.id, { wine_type: type })}
+                              className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${item.wineData!.wine_type === type ? 'bg-primary text-primary-foreground border-primary' : 'border-border bg-background'}`}
+                            >
+                              {labels[type]}
+                            </button>
+                          )
+                        })}
+                      </div>
+                      <input
+                        className="w-full text-sm border border-border rounded-lg px-3 py-2 bg-background"
+                        placeholder="와인명"
+                        value={item.wineData.name ?? ''}
+                        onChange={(e) => updateBatchItem(item.id, { name: e.target.value || null })}
+                      />
+                      <input
+                        className="w-full text-sm border border-border rounded-lg px-3 py-2 bg-background"
+                        placeholder="생산자"
+                        value={item.wineData.producer ?? ''}
+                        onChange={(e) => updateBatchItem(item.id, { producer: e.target.value || null })}
+                      />
+                      <div className="flex gap-2">
+                        <input
+                          className="flex-1 text-sm border border-border rounded-lg px-3 py-2 bg-background"
+                          placeholder="지역"
+                          value={item.wineData.region ?? ''}
+                          onChange={(e) => updateBatchItem(item.id, { region: e.target.value || null })}
+                        />
+                        <input
+                          className="w-20 text-sm border border-border rounded-lg px-3 py-2 bg-background"
+                          placeholder="빈티지"
+                          type="number"
+                          value={item.wineData.vintage ?? ''}
+                          onChange={(e) => updateBatchItem(item.id, { vintage: e.target.value ? parseInt(e.target.value) : null })}
+                        />
+                      </div>
+                      <input
+                        className="w-full text-sm border border-border rounded-lg px-3 py-2 bg-background"
+                        placeholder="품종 (쉼표로 구분)"
+                        value={item.wineData.grape_varieties.join(', ')}
+                        onChange={(e) => updateBatchItem(item.id, {
+                          grape_varieties: e.target.value ? e.target.value.split(',').map(s => s.trim()).filter(Boolean) : []
+                        })}
+                      />
+                      <label className="flex items-center gap-2 text-sm cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={item.wineData.is_natural}
+                          onChange={(e) => updateBatchItem(item.id, { is_natural: e.target.checked })}
+                          className="w-4 h-4 rounded"
+                        />
+                        내추럴 와인
+                      </label>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* 분석 시작 버튼 */}
+          {!batchScanning && !batchSaved && batchItems.every(it => it.status === 'queued') && (
+            <Button onClick={handleBatchScan} className="w-full">라벨 분석 시작</Button>
+          )}
+
+          {/* 분석 중 진행률 */}
           {batchScanning && (
             <p className="text-center text-sm text-muted-foreground animate-pulse">
               분석 중... ({batchItems.filter(it => it.status === 'done' || it.status === 'error').length}/{batchItems.length})
             </p>
           )}
 
-          {/* Batch: save */}
-          {!batchScanning && !batchSaved && doneCount > 0 && (
+          {/* 저장 버튼 */}
+          {!batchScanning && !batchSaved && doneCount > 0 && !batchItems.every(it => it.status === 'queued') && (
             <Button onClick={handleBatchSave} disabled={batchSaving} className="w-full">
               {batchSaving ? '저장 중...' : `${doneCount}개 와인 저장하기`}
             </Button>
           )}
 
-          {/* Batch: saved */}
+          {/* 저장 완료 */}
           {batchSaved && (
             <div className="space-y-3">
               <div className="bg-card border border-border rounded-2xl p-4 text-center">

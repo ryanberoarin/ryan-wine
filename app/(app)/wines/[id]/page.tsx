@@ -24,6 +24,10 @@ export default function WineDetailPage({ params }: { params: Promise<{ id: strin
   const { user } = useUser()
   const [wine, setWine] = useState<Wine | null>(null)
   const [notes, setNotes] = useState<TastingNote[]>([])
+  const [editMode, setEditMode] = useState(false)
+  const [editData, setEditData] = useState<Partial<Wine>>({})
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState('')
 
   useEffect(() => {
     supabase.from('wines').select('*').eq('id', id).single()
@@ -55,6 +59,46 @@ export default function WineDetailPage({ params }: { params: Promise<{ id: strin
   const textureKw = topByField(notes, 'texture_keywords')
   const myNote = notes.find((n) => n.user_id === user?.id)
 
+  function openEdit() {
+    if (!wine) return
+    setEditData({
+      name: wine.name,
+      producer: wine.producer,
+      region: wine.region,
+      country: wine.country,
+      vintage: wine.vintage,
+      grape_varieties: wine.grape_varieties ?? [],
+      wine_type: wine.wine_type,
+      is_natural: wine.is_natural,
+      ai_description: wine.ai_description,
+    })
+    setEditMode(true)
+  }
+
+  async function saveEdit() {
+    if (!wine) return
+    setSaving(true)
+    setSaveError('')
+    const { data, error } = await supabase.from('wines').update({
+      name: editData.name?.trim() || null,
+      producer: editData.producer?.trim() || null,
+      region: editData.region?.trim() || null,
+      country: editData.country?.trim() || null,
+      vintage: editData.vintage || null,
+      grape_varieties: editData.grape_varieties ?? [],
+      wine_type: editData.wine_type || null,
+      is_natural: editData.is_natural ?? false,
+      ai_description: editData.ai_description?.trim() || null,
+    }).eq('id', id).select().single()
+    if (error) {
+      setSaveError('저장에 실패했어요. 다시 시도해주세요.')
+    } else if (data) {
+      setWine(data as Wine)
+      setEditMode(false)
+    }
+    setSaving(false)
+  }
+
   return (
     <div className="px-4 py-6 space-y-6 pb-24">
       {/* 와인 기본 정보 */}
@@ -62,27 +106,122 @@ export default function WineDetailPage({ params }: { params: Promise<{ id: strin
         {wine.label_image_url && (
           <img src={wine.label_image_url} alt="라벨" className="w-full max-h-56 object-contain rounded-xl bg-muted" />
         )}
-        <div className="flex items-start justify-between gap-2">
-          <div>
-            <h1 className="text-xl font-bold">{wine.name}</h1>
-            <p className="text-sm text-muted-foreground">
-              {[wine.producer, wine.region, wine.country].filter(Boolean).join(' · ')}
-            </p>
+
+        {editMode ? (
+          <div className="space-y-2">
+            <div className="flex gap-1.5 flex-wrap">
+              {(['red', 'white', 'orange', 'rose', 'sparkling', 'other'] as const).map(type => (
+                <button
+                  key={type}
+                  onClick={() => setEditData(p => ({ ...p, wine_type: type }))}
+                  className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${editData.wine_type === type ? 'bg-primary text-primary-foreground border-primary' : 'border-border bg-background'}`}
+                >
+                  {wineTypeLabel[type]}
+                </button>
+              ))}
+            </div>
+            <input
+              className="w-full text-sm border border-border rounded-lg px-3 py-2 bg-background"
+              placeholder="와인명"
+              value={editData.name ?? ''}
+              onChange={(e) => setEditData(p => ({ ...p, name: e.target.value }))}
+            />
+            <input
+              className="w-full text-sm border border-border rounded-lg px-3 py-2 bg-background"
+              placeholder="생산자"
+              value={editData.producer ?? ''}
+              onChange={(e) => setEditData(p => ({ ...p, producer: e.target.value }))}
+            />
+            <div className="flex gap-2">
+              <input
+                className="flex-1 text-sm border border-border rounded-lg px-3 py-2 bg-background"
+                placeholder="지역"
+                value={editData.region ?? ''}
+                onChange={(e) => setEditData(p => ({ ...p, region: e.target.value }))}
+              />
+              <input
+                className="flex-1 text-sm border border-border rounded-lg px-3 py-2 bg-background"
+                placeholder="국가"
+                value={editData.country ?? ''}
+                onChange={(e) => setEditData(p => ({ ...p, country: e.target.value }))}
+              />
+            </div>
+            <div className="flex gap-2">
+              <input
+                className="w-24 text-sm border border-border rounded-lg px-3 py-2 bg-background"
+                placeholder="빈티지"
+                type="number"
+                value={editData.vintage ?? ''}
+                onChange={(e) => setEditData(p => ({ ...p, vintage: e.target.value ? parseInt(e.target.value) : null }))}
+              />
+              <label className="flex items-center gap-2 text-sm cursor-pointer flex-1">
+                <input
+                  type="checkbox"
+                  checked={editData.is_natural ?? false}
+                  onChange={(e) => setEditData(p => ({ ...p, is_natural: e.target.checked }))}
+                  className="w-4 h-4 rounded"
+                />
+                내추럴 와인
+              </label>
+            </div>
+            <input
+              className="w-full text-sm border border-border rounded-lg px-3 py-2 bg-background"
+              placeholder="품종 (쉼표로 구분)"
+              value={editData.grape_varieties?.join(', ') ?? ''}
+              onChange={(e) => setEditData(p => ({ ...p, grape_varieties: e.target.value ? e.target.value.split(',').map(s => s.trim()).filter(Boolean) : [] }))}
+            />
+            <textarea
+              className="w-full text-sm border border-border rounded-lg px-3 py-2 bg-background resize-none"
+              placeholder="와인 설명"
+              rows={3}
+              value={editData.ai_description ?? ''}
+              onChange={(e) => setEditData(p => ({ ...p, ai_description: e.target.value }))}
+            />
+            {saveError && <p className="text-xs text-destructive">{saveError}</p>}
+            <div className="flex gap-2">
+              <button
+                onClick={saveEdit}
+                disabled={saving}
+                className="flex-1 bg-primary text-primary-foreground text-sm font-medium py-2.5 rounded-xl disabled:opacity-50"
+              >
+                {saving ? '저장 중...' : '저장'}
+              </button>
+              <button
+                onClick={() => { setEditMode(false); setSaveError('') }}
+                className="flex-1 border border-border text-sm font-medium py-2.5 rounded-xl"
+              >
+                취소
+              </button>
+            </div>
           </div>
-          <div className="flex flex-col gap-1 items-end shrink-0">
-            {wine.wine_type && <Badge>{wineTypeLabel[wine.wine_type]}</Badge>}
-            {wine.vintage && <span className="text-xs text-muted-foreground">{wine.vintage}년</span>}
-          </div>
-        </div>
-        {wine.grape_varieties && wine.grape_varieties.length > 0 && (
-          <div className="flex flex-wrap gap-1">
-            {wine.grape_varieties.map((g) => (
-              <span key={g} className="text-xs bg-secondary px-2 py-0.5 rounded-full">{g}</span>
-            ))}
-          </div>
-        )}
-        {wine.ai_description && (
-          <p className="text-sm text-muted-foreground bg-muted rounded-xl px-4 py-3">{wine.ai_description}</p>
+        ) : (
+          <>
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <h1 className="text-xl font-bold">{wine.name}</h1>
+                <p className="text-sm text-muted-foreground">
+                  {[wine.producer, wine.region, wine.country].filter(Boolean).join(' · ')}
+                </p>
+              </div>
+              <div className="flex flex-col gap-1 items-end shrink-0">
+                {wine.wine_type && <Badge>{wineTypeLabel[wine.wine_type]}</Badge>}
+                {wine.vintage && <span className="text-xs text-muted-foreground">{wine.vintage}년</span>}
+                {user?.is_admin && (
+                  <button onClick={openEdit} className="text-xs text-primary/60 mt-1">✏️ 수정</button>
+                )}
+              </div>
+            </div>
+            {wine.grape_varieties && wine.grape_varieties.length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {wine.grape_varieties.map((g) => (
+                  <span key={g} className="text-xs bg-secondary px-2 py-0.5 rounded-full">{g}</span>
+                ))}
+              </div>
+            )}
+            {wine.ai_description && (
+              <p className="text-sm text-muted-foreground bg-muted rounded-xl px-4 py-3">{wine.ai_description}</p>
+            )}
+          </>
         )}
       </div>
 
