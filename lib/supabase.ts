@@ -8,12 +8,16 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey)
 export type User = {
   id: string
   nickname: string
-  device_token: string
+  // 서버 API 응답(본인 로그인)에만 포함 — anon 클라이언트 조회에서는 컬럼 권한으로 차단됨
+  device_token?: string
   is_admin: boolean
   is_active: boolean
   subsidy_eligible: boolean
   created_at: string
 }
+
+// anon 클라이언트에서 users 조회 시 사용할 컬럼 목록 (device_token 제외)
+export const USER_PUBLIC_COLUMNS = 'id, nickname, is_admin, is_active, subsidy_eligible, created_at'
 
 export type Wine = {
   id: string
@@ -57,6 +61,7 @@ export type Session = {
   total_cost: number | null
   subsidy_carryover: number | null
   settlement_published: boolean
+  settlement_snapshot: import('./settlement').SettlementSnapshot | null
   created_by: string | null
   created_at: string
 }
@@ -67,6 +72,7 @@ export type SessionRsvp = {
   user_id: string
   status: 'attending' | 'not_attending'
   attended_rounds: number[] | null
+  paid_at: string | null
   created_at: string
   user?: User
 }

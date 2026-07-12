@@ -27,6 +27,7 @@ export default function HomePage() {
   const [clubStats, setClubStats] = useState<ClubStats | null>(null)
   // 관리자용
   const [activeCount, setActiveCount] = useState(0)
+  const [eligibleCount, setEligibleCount] = useState(0)
 
   useEffect(() => {
     if (!user) return
@@ -55,11 +56,20 @@ export default function HomePage() {
 
         const { count: memberCount } = await supabase
           .from('users')
-          .select('*', { count: 'exact', head: true })
+          .select('id', { count: 'exact', head: true })
           .eq('is_active', true)
         setTotalMembers(memberCount ?? 0)
 
-        if (user.is_admin) setActiveCount(memberCount ?? 0)
+        if (user.is_admin) {
+          setActiveCount(memberCount ?? 0)
+          // 복수가입자 제외한 지원금 대상 수
+          const { count: eligible } = await supabase
+            .from('users')
+            .select('id', { count: 'exact', head: true })
+            .eq('is_active', true)
+            .eq('subsidy_eligible', true)
+          setEligibleCount(eligible ?? 0)
+        }
 
         const { data: winesData } = await supabase
           .from('wines')
@@ -380,8 +390,8 @@ export default function HomePage() {
           <p className="text-xs text-muted-foreground mt-1">활성 멤버</p>
         </div>
         <div className="bg-card border border-border rounded-xl p-3 text-center">
-          <p className="text-lg font-bold text-primary">{(activeCount * 35000).toLocaleString()}원</p>
-          <p className="text-xs text-muted-foreground mt-1">월 총 지원금</p>
+          <p className="text-lg font-bold text-primary">{(eligibleCount * 35000).toLocaleString()}원</p>
+          <p className="text-xs text-muted-foreground mt-1">월 총 지원금 (대상 {eligibleCount}명)</p>
         </div>
       </div>
 

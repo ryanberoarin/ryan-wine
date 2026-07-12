@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import Anthropic from '@anthropic-ai/sdk'
 import { createClient } from '@supabase/supabase-js'
 import { getAuthUser } from '@/lib/api-auth'
+import { allow, retryAfterSeconds } from '@/lib/rate-limit'
 
 export const maxDuration = 30
 
@@ -15,6 +16,14 @@ export async function POST(req: NextRequest) {
   const user = await getAuthUser(req)
   if (!user) return NextResponse.json({ error: '로그인이 필요해요.' }, { status: 401 })
   if (!user.is_admin) return NextResponse.json({ error: '관리자만 사용할 수 있어요.' }, { status: 403 })
+
+  if (!allow(`review:${user.id}`, 10, 60 * 60 * 1000)) {
+    const retry = retryAfterSeconds(`review:${user.id}`)
+    return NextResponse.json(
+      { success: false, error: `1시간에 10회까지 생성할 수 있어요. ${retry}초 후 다시 시도해주세요.` },
+      { status: 429 }
+    )
+  }
 
   try {
     const { sessionId } = await req.json()

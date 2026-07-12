@@ -3,9 +3,10 @@
 import { useEffect } from 'react'
 import { usePathname } from 'next/navigation'
 import { useUser } from '@/components/UserContext'
+import { getDeviceToken } from '@/lib/auth'
 import BottomNav from '@/components/BottomNav'
 
-async function registerPush(userId: string, deviceToken: string) {
+async function registerPush(deviceToken: string) {
   if (!('serviceWorker' in navigator) || !('PushManager' in window)) return
   try {
     const reg = await navigator.serviceWorker.register('/sw.js')
@@ -39,7 +40,7 @@ export default function AuthLayoutClient({ children }: { children: React.ReactNo
   }, [user, loading])
 
   useEffect(() => {
-    if (user) registerPush(user.id, user.device_token)
+    if (user) registerPush(getDeviceToken())
   }, [user])
 
   if (loading || !user) return null

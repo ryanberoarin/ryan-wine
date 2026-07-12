@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { useUser } from '@/components/UserContext'
+import { getDeviceToken } from '@/lib/auth'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -47,13 +48,30 @@ export default function NewSessionPage() {
 
       if (!lastSession) { setCarryoverLoading(false); return }
 
-      const [{ count: totalActive }, { count: attendingCount }] = await Promise.all([
-        supabase.from('users').select('*', { count: 'exact', head: true }).eq('is_active', true),
-        supabase.from('session_rsvps').select('*', { count: 'exact', head: true })
+      // 이월은 지원금 대상(복수가입 제외) 불참자 기준.
+      // 직전 정산이 스냅샷으로 확정됐으면 그 값을 그대로 사용.
+      const { data: lastFull } = await supabase
+        .from('sessions')
+        .select('settlement_snapshot, subsidy_carryover')
+        .eq('id', lastSession.id)
+        .single()
+
+      if (lastFull?.settlement_snapshot?.carryover_to_next !== undefined) {
+        setCarryover(lastFull.settlement_snapshot.carryover_to_next)
+        setCarryoverLoading(false)
+        return
+      }
+
+      const [{ count: totalEligible }, { data: attendingRows }] = await Promise.all([
+        supabase.from('users').select('id', { count: 'exact', head: true })
+          .eq('is_active', true).eq('subsidy_eligible', true),
+        supabase.from('session_rsvps').select('user_id, user:users(subsidy_eligible)')
           .eq('session_id', lastSession.id).eq('status', 'attending'),
       ])
 
-      const notAttending = Math.max(0, (totalActive ?? 0) - (attendingCount ?? 0))
+      const attendingEligible = (attendingRows ?? [])
+        .filter((r: any) => r.user?.subsidy_eligible !== false).length
+      const notAttending = Math.max(0, (totalEligible ?? 0) - attendingEligible)
       setCarryover(notAttending * 17500)
       setCarryoverLoading(false)
     }
@@ -94,7 +112,7 @@ export default function NewSessionPage() {
       // 참석 투표 시작 알림 발송
       fetch('/api/push/send', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-device-token': user!.device_token },
+        headers: { 'Content-Type': 'application/json', 'x-device-token': getDeviceToken() },
         body: JSON.stringify({
           title: '🥂 새 모임 참석 투표가 시작됐어요!',
           body: `${data.title} 참석 여부를 알려주세요.${data.rsvp_deadline ? ` 마감: ${new Date(data.rsvp_deadline).toLocaleDateString('ko-KR', { month: 'long', day: 'numeric' })}` : ''}`,

@@ -69,12 +69,34 @@ function NewNoteContent() {
   })
   const [memo, setMemo] = useState('')
   const [saving, setSaving] = useState(false)
+  // 퀵 레이팅 등으로 이미 만든 노트가 있으면 이어쓰기 (중복 노트 방지)
+  const [existingNoteId, setExistingNoteId] = useState<string | null>(null)
 
   useEffect(() => {
     if (!wineId) return
     supabase.from('wines').select('*').eq('id', wineId).single()
       .then(({ data }) => setWine(data as Wine))
   }, [wineId])
+
+  useEffect(() => {
+    if (!wineId || !user) return
+    let q = supabase.from('tasting_notes')
+      .select('id, rating, aroma_keywords, taste_keywords, texture_keywords, memo')
+      .eq('wine_id', wineId).eq('user_id', user.id)
+      .order('created_at', { ascending: false }).limit(1)
+    if (sessionId) q = q.eq('session_id', sessionId)
+    q.maybeSingle().then(({ data }) => {
+      if (!data) return
+      setExistingNoteId(data.id)
+      setRating(data.rating ?? 0)
+      setSelected({
+        aroma: data.aroma_keywords ?? [],
+        taste: data.taste_keywords ?? [],
+        texture: data.texture_keywords ?? [],
+      })
+      setMemo(data.memo ?? '')
+    })
+  }, [wineId, sessionId, user])
 
   function toggleKeyword(category: string, kw: string) {
     setSelected((prev) => {
@@ -92,16 +114,23 @@ function NewNoteContent() {
     if (!wineId || !user) return
     setSaving(true)
     try {
-      await supabase.from('tasting_notes').insert({
-        wine_id: wineId,
-        user_id: user.id,
-        session_id: sessionId ?? null,
+      const payload = {
         rating: rating > 0 ? rating : null,
         aroma_keywords: selected.aroma,
         taste_keywords: selected.taste,
         texture_keywords: selected.texture,
         memo: memo.trim() || null,
-      })
+      }
+      if (existingNoteId) {
+        await supabase.from('tasting_notes').update(payload).eq('id', existingNoteId)
+      } else {
+        await supabase.from('tasting_notes').insert({
+          wine_id: wineId,
+          user_id: user.id,
+          session_id: sessionId ?? null,
+          ...payload,
+        })
+      }
       router.push(sessionId ? `/sessions/${sessionId}` : `/wines/${wineId}`)
     } finally {
       setSaving(false)

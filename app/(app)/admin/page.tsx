@@ -3,8 +3,9 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { supabase } from '@/lib/supabase'
+import { supabase, USER_PUBLIC_COLUMNS } from '@/lib/supabase'
 import { useUser } from '@/components/UserContext'
+import { getDeviceToken } from '@/lib/auth'
 import type { User } from '@/lib/auth'
 
 export default function AdminPage() {
@@ -21,9 +22,8 @@ export default function AdminPage() {
   }, [user, router])
 
   async function fetchInviteCode() {
-    const deviceToken = localStorage.getItem('wine_club_device_token') ?? ''
     const res = await fetch('/api/admin-config', {
-      headers: { 'x-device-token': deviceToken },
+      headers: { 'x-device-token': getDeviceToken() },
     })
     if (res.ok) {
       const json = await res.json()
@@ -32,21 +32,35 @@ export default function AdminPage() {
   }
 
   async function fetchMembers() {
-    const { data } = await supabase.from('users').select('*')
+    const { data } = await supabase.from('users').select(USER_PUBLIC_COLUMNS)
       .order('is_active', { ascending: false })
       .order('created_at', { ascending: true })
-    setMembers((data as User[]) ?? [])
+    setMembers((data as unknown as User[]) ?? [])
     setLoading(false)
   }
 
-  async function toggleActive(memberId: string, currentActive: boolean) {
-    await supabase.from('users').update({ is_active: !currentActive }).eq('id', memberId)
-    setMembers((prev) => prev.map((m) => m.id === memberId ? { ...m, is_active: !currentActive } : m))
+  // users 테이블 쓰기는 RLS로 차단 — 서버 API(service role) 경유
+  async function updateMember(memberId: string, action: 'set_active' | 'set_subsidy', value: boolean) {
+    const res = await fetch('/api/admin/members', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-device-token': getDeviceToken() },
+      body: JSON.stringify({ userId: memberId, action, value }),
+    })
+    if (!res.ok) {
+      const json = await res.json().catch(() => ({}))
+      alert(json.error ?? '변경에 실패했어요.')
+      return
+    }
+    const { user: updated } = await res.json()
+    setMembers((prev) => prev.map((m) => m.id === memberId ? { ...m, ...updated } : m))
   }
 
-  async function toggleSubsidyEligible(memberId: string, current: boolean) {
-    await supabase.from('users').update({ subsidy_eligible: !current }).eq('id', memberId)
-    setMembers((prev) => prev.map((m) => m.id === memberId ? { ...m, subsidy_eligible: !current } : m))
+  function toggleActive(memberId: string, currentActive: boolean) {
+    return updateMember(memberId, 'set_active', !currentActive)
+  }
+
+  function toggleSubsidyEligible(memberId: string, current: boolean) {
+    return updateMember(memberId, 'set_subsidy', !current)
   }
 
   if (!user?.is_admin) return null
@@ -54,7 +68,9 @@ export default function AdminPage() {
   const activeMembers = members.filter((m) => m.is_active)
   const activeCount = activeMembers.length
   const inactiveCount = members.filter((m) => !m.is_active).length
-  const monthlySubsidy = activeCount * 35000
+  // 복수가입자(subsidy_eligible=false)는 지원금 제외
+  const eligibleCount = activeMembers.filter((m) => m.subsidy_eligible).length
+  const monthlySubsidy = eligibleCount * 35000
 
   return (
     <div className="px-4 py-6 space-y-6">
@@ -80,7 +96,7 @@ export default function AdminPage() {
         </div>
         <div className="bg-card border border-border rounded-xl p-3 text-center">
           <p className="text-2xl font-bold text-primary">{monthlySubsidy.toLocaleString()}원</p>
-          <p className="text-xs text-muted-foreground mt-1">월 총 지원금</p>
+          <p className="text-xs text-muted-foreground mt-1">월 총 지원금 (대상 {eligibleCount}명)</p>
         </div>
       </div>
 

@@ -1,9 +1,10 @@
 'use client'
 
-import { useState, useRef, Suspense } from 'react'
+import { useState, useRef, useEffect, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { useUser } from '@/components/UserContext'
+import { getDeviceToken } from '@/lib/auth'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 
@@ -97,10 +98,11 @@ function ScanContent() {
   const [batchSaved, setBatchSaved] = useState(false)
   const [expandedId, setExpandedId] = useState<string | null>(null)
 
-  if (user && !user.is_admin) {
-    router.replace('/home')
-    return null
-  }
+  const isAdmin = !user || user.is_admin
+  useEffect(() => {
+    if (!isAdmin) router.replace('/home')
+  }, [isAdmin, router])
+  if (!isAdmin) return null
 
   const isBatchMode = batchItems.length > 0
 
@@ -179,7 +181,7 @@ function ScanContent() {
     try {
       const res = await fetch('/api/scan', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-device-token': user!.device_token },
+        headers: { 'Content-Type': 'application/json', 'x-device-token': getDeviceToken() },
         body: JSON.stringify({ imageBase64, mediaType: 'image/jpeg' }),
       })
       const json = await res.json()
@@ -242,7 +244,7 @@ function ScanContent() {
       try {
         const res = await fetch('/api/scan', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-device-token': user!.device_token },
+          headers: { 'Content-Type': 'application/json', 'x-device-token': getDeviceToken() },
           body: JSON.stringify({ imageBase64: item.base64, mediaType: 'image/jpeg' }),
         })
         const json = await res.json()

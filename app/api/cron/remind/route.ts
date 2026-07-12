@@ -71,6 +71,7 @@ export async function GET(req: NextRequest) {
       .from('users')
       .select('id', { count: 'exact' })
       .eq('is_active', true)
+      .eq('subsidy_eligible', true)
 
     const eligibleCount = eligibleUsers?.length ?? 0
     const totalAmount = eligibleCount * 35000

@@ -1,4 +1,3 @@
-import { supabase } from './supabase'
 import type { User } from './supabase'
 export type { User }
 
@@ -6,6 +5,10 @@ const DEVICE_TOKEN_KEY = 'wine_club_device_token'
 const USER_KEY = 'wine_club_user'
 const ISSUED_AT_KEY = 'wine_club_token_issued_at'
 const TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000 // 30일
+
+export function getDeviceToken(): string {
+  return localStorage.getItem(DEVICE_TOKEN_KEY) ?? ''
+}
 
 function getOrCreateDeviceToken(): string {
   let token = localStorage.getItem(DEVICE_TOKEN_KEY)
@@ -55,39 +58,31 @@ export async function login(
     return { user: json.user as User }
   }
 
-  // 1. 현재 기기에 이미 로그인된 유저
-  const { data: byToken } = await supabase
-    .from('users').select('*').eq('device_token', deviceToken).maybeSingle()
-  if (byToken) {
-    localStorage.setItem(USER_KEY, JSON.stringify(byToken))
-    return { user: byToken as User }
-  }
-
-  // 2. 같은 이름의 기존 유저 → 기기 변경 시 초대코드 재검증 (닉네임만으로 탈취 방지)
-  const res2 = await fetch('/api/login', {
+  // 서버에서 처리: 같은 기기 재로그인 → 기기 변경(초대코드 재검증) 순
+  const res = await fetch('/api/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ nickname: nickname.trim(), deviceToken, inviteCode: inviteCode.trim() }),
   })
-  if (res2.ok) {
-    const json2 = await res2.json()
-    localStorage.setItem(USER_KEY, JSON.stringify(json2.user))
+  if (res.ok) {
+    const json = await res.json()
+    localStorage.setItem(USER_KEY, JSON.stringify(json.user))
     setIssuedAt()
-    return { user: json2.user as User }
+    return { user: json.user as User }
   }
-  if (res2.status !== 404) {
-    const json2 = await res2.json()
-    throw new Error(json2.error ?? '새 기기로 입장하려면 초대 코드가 필요해요.')
+  if (res.status !== 404) {
+    const json = await res.json()
+    throw new Error(json.error ?? '새 기기로 입장하려면 초대 코드가 필요해요.')
   }
 
-  // 3. 신규 가입: 초대코드 서버에서 검증
-  const res = await fetch('/api/register', {
+  // 신규 가입: 초대코드 서버에서 검증
+  const res2 = await fetch('/api/register', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ nickname: nickname.trim(), deviceToken, inviteCode: inviteCode.trim() }),
   })
-  const json = await res.json()
-  if (!res.ok) throw new Error(json.error ?? '가입에 실패했어요.')
+  const json = await res2.json()
+  if (!res2.ok) throw new Error(json.error ?? '가입에 실패했어요.')
   const data = json.user as User
   localStorage.setItem(USER_KEY, JSON.stringify(data))
   setIssuedAt()

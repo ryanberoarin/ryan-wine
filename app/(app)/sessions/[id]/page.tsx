@@ -2,20 +2,22 @@
 
 import { useEffect, useState, use } from 'react'
 import Link from 'next/link'
-import { supabase, Session, SessionWine, SessionRsvp, CostItem, SessionPenalty, User } from '@/lib/supabase'
+import { supabase, Session, SessionWine, SessionRsvp, CostItem, SessionPenalty, User, USER_PUBLIC_COLUMNS } from '@/lib/supabase'
 import { useUser } from '@/components/UserContext'
+import { getDeviceToken } from '@/lib/auth'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
+import { calcSettlement, buildSnapshot } from '@/lib/settlement'
+import SettlementTab from '@/components/session/SettlementTab'
+import MemberSettlement from '@/components/session/MemberSettlement'
+import QuickRating from '@/components/session/QuickRating'
 
 const statusLabel: Record<string, string> = {
   planning: '준비 중', active: '진행 중', completed: '완료',
 }
-const categoryLabel: Record<string, string> = {
-  wine: '🍷 와인', venue: '🏠 장소', taxi: '🚕 택시', food: '🍽️ 음식', other: '기타',
-}
-const SUBSIDY_PER_PERSON = 35000
 type Tab = 'wines' | 'settlement'
+type MyNote = { id: string; rating: number | null }
 
 export default function SessionDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
@@ -23,36 +25,17 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
   const [session, setSession] = useState<Session | null>(null)
   const [wines, setWines] = useState<SessionWine[]>([])
   const [rsvps, setRsvps] = useState<SessionRsvp[]>([])
+  const [rsvpsLoaded, setRsvpsLoaded] = useState(false)
   const [myRsvp, setMyRsvp] = useState<'attending' | 'not_attending' | null>(null)
   const [costItems, setCostItems] = useState<CostItem[]>([])
-  const [totalActiveMembers, setTotalActiveMembers] = useState(0)
+  const [penalties, setPenalties] = useState<SessionPenalty[]>([])
+  const [allMembers, setAllMembers] = useState<User[]>([])
+  const [membersLoaded, setMembersLoaded] = useState(false)
   const [tab, setTab] = useState<Tab>('wines')
   // 와인 추가
   const [showAddWine, setShowAddWine] = useState(false)
   const [newWineName, setNewWineName] = useState('')
   const [addingWine, setAddingWine] = useState(false)
-  // 비용 추가
-  const [newRound, setNewRound] = useState(1)
-  const [newCategory, setNewCategory] = useState<CostItem['category']>('wine')
-  const [newDescription, setNewDescription] = useState('')
-  const [newAmount, setNewAmount] = useState('')
-  const [addingCost, setAddingCost] = useState(false)
-  const [showCostForm, setShowCostForm] = useState(false)
-  // 이월 지원금
-  const [carryoverInput, setCarryoverInput] = useState('0')
-  const [savingCarryover, setSavingCarryover] = useState(false)
-  // 벌금
-  const [penalties, setPenalties] = useState<SessionPenalty[]>([])
-  const [showAddPenalty, setShowAddPenalty] = useState(false)
-  const [newPenaltyUserId, setNewPenaltyUserId] = useState('')
-  const [newPenaltyAmount, setNewPenaltyAmount] = useState('')
-  const [newPenaltyReason, setNewPenaltyReason] = useState('D-day')
-  const [addingPenalty, setAddingPenalty] = useState(false)
-  // 정산 공개
-  const [publishingSettlement, setPublishingSettlement] = useState(false)
-  // 후기 생성
-  const [generatingReview, setGeneratingReview] = useState(false)
-  const [review, setReview] = useState('')
   // 모임 정보 수정
   const [showEdit, setShowEdit] = useState(false)
   const [editTitle, setEditTitle] = useState('')
@@ -61,10 +44,6 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
   const [editScheduledAt, setEditScheduledAt] = useState('')
   const [editRsvpDeadline, setEditRsvpDeadline] = useState('')
   const [savingEdit, setSavingEdit] = useState(false)
-  // 전체 멤버 (미투표자 표시용)
-  const [allMembers, setAllMembers] = useState<User[]>([])
-  // 차수별 참석 저장 중인 userId
-  const [savingRounds, setSavingRounds] = useState<string | null>(null)
   // 카톡 리마인드 복사
   const [reminderCopied, setReminderCopied] = useState(false)
   // 음용 순서
@@ -76,26 +55,23 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
   const [savingOrder, setSavingOrder] = useState(false)
   // 계좌 정보 (서버에서 안전하게 조회)
   const [paymentInfo, setPaymentInfo] = useState<{ bank: string; account: string } | null>(null)
+  // 퀵 레이팅: wine_id → 내 시음평
+  const [myNotes, setMyNotes] = useState<Record<string, MyNote>>({})
+  const [savingNoteWineId, setSavingNoteWineId] = useState<string | null>(null)
 
   useEffect(() => {
     supabase.from('sessions').select('*').eq('id', id).single()
-      .then(({ data }) => {
-        const s = data as Session
-        setSession(s)
-        setCarryoverInput(String(s?.subsidy_carryover ?? 0))
-      })
+      .then(({ data }) => setSession(data as Session))
     fetchWines()
     fetchRsvps()
     fetchCostItems()
     fetchPenalties()
-    supabase.from('users').select('*').eq('is_active', true).order('nickname')
-      .then(({ data, count: _ }) => {
-        const members = (data as User[]) ?? []
-        setAllMembers(members)
-        setTotalActiveMembers(members.length)
+    supabase.from('users').select(USER_PUBLIC_COLUMNS).eq('is_active', true).order('nickname')
+      .then(({ data }) => {
+        setAllMembers((data as unknown as User[]) ?? [])
+        setMembersLoaded(true)
       })
-    const deviceToken = localStorage.getItem('wine_club_device_token') ?? ''
-    fetch('/api/payment-info', { headers: { 'x-device-token': deviceToken } })
+    fetch('/api/payment-info', { headers: { 'x-device-token': getDeviceToken() } })
       .then((r) => r.ok ? r.json() : null)
       .then((json) => { if (json) setPaymentInfo({ bank: json.bank, account: json.account }) })
   }, [id])
@@ -103,6 +79,21 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
   useEffect(() => {
     if (user) setMyRsvp(rsvps.find((r) => r.user_id === user.id)?.status ?? null)
   }, [rsvps, user])
+
+  // 내 시음평 (퀵 레이팅 표시용)
+  useEffect(() => {
+    if (!user) return
+    supabase.from('tasting_notes')
+      .select('id, wine_id, rating')
+      .eq('session_id', id).eq('user_id', user.id)
+      .then(({ data }) => {
+        const map: Record<string, MyNote> = {}
+        for (const n of (data ?? []) as { id: string; wine_id: string; rating: number | null }[]) {
+          map[n.wine_id] = { id: n.id, rating: n.rating }
+        }
+        setMyNotes(map)
+      })
+  }, [id, user])
 
   async function fetchWines() {
     const { data } = await supabase
@@ -114,6 +105,7 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
     const { data } = await supabase
       .from('session_rsvps').select('*, user:users(nickname)').eq('session_id', id)
     setRsvps((data as SessionRsvp[]) ?? [])
+    setRsvpsLoaded(true)
   }
   async function fetchCostItems() {
     const { data } = await supabase
@@ -121,7 +113,6 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
       .eq('session_id', id).order('round_number').order('created_at')
     setCostItems((data as CostItem[]) ?? [])
   }
-
   async function fetchPenalties() {
     const { data } = await supabase
       .from('session_penalties').select('*, user:users(nickname)')
@@ -129,45 +120,23 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
     setPenalties((data as SessionPenalty[]) ?? [])
   }
 
-  async function deletePenaltyById(penaltyId: string) {
-    await supabase.from('session_penalties').delete().eq('id', penaltyId)
-    setPenalties(prev => prev.filter(p => p.id !== penaltyId))
-  }
-
-  async function addManualPenalty() {
-    if (!newPenaltyUserId || !newPenaltyAmount) return
-    const amount = parseInt(newPenaltyAmount.replace(/,/g, ''))
-    if (isNaN(amount) || amount <= 0) return
-    setAddingPenalty(true)
-    await supabase.from('session_penalties').insert({
-      session_id: id,
-      user_id: newPenaltyUserId,
-      amount,
-      reason: newPenaltyReason,
-    })
-    await fetchPenalties()
-    setNewPenaltyUserId('')
-    setNewPenaltyAmount('')
-    setNewPenaltyReason('D-day')
-    setShowAddPenalty(false)
-    setAddingPenalty(false)
-  }
-
-  async function toggleRound(userId: string, round: number, currentRounds: number[] | null, allRounds: number[]) {
-    const base = currentRounds ?? allRounds
-    const newRounds = base.includes(round)
-      ? base.filter((r) => r !== round)
-      : [...base, round].sort((a, b) => a - b)
-    // 전체 차수 참석이면 null로 저장 (기본값)
-    const toStore = newRounds.length === allRounds.length ? null : newRounds
-    setSavingRounds(userId)
-    await supabase.from('session_rsvps')
-      .update({ attended_rounds: toStore })
-      .eq('session_id', id).eq('user_id', userId)
-    setRsvps((prev) => prev.map((r) =>
-      r.user_id === userId ? { ...r, attended_rounds: toStore } : r
-    ))
-    setSavingRounds(null)
+  // 별점만 빠르게 기록. 이미 쓴 시음평이 있으면 별점만 갱신.
+  async function quickRate(wineId: string, n: number) {
+    if (!user) return
+    const existing = myNotes[wineId]
+    const newRating = existing?.rating === n ? null : n // 같은 별점 다시 탭하면 해제
+    setSavingNoteWineId(wineId)
+    if (existing) {
+      await supabase.from('tasting_notes').update({ rating: newRating }).eq('id', existing.id)
+      setMyNotes((prev) => ({ ...prev, [wineId]: { ...existing, rating: newRating } }))
+    } else if (newRating !== null) {
+      const { data } = await supabase.from('tasting_notes').insert({
+        wine_id: wineId, user_id: user.id, session_id: id, rating: newRating,
+        aroma_keywords: [], taste_keywords: [], texture_keywords: [],
+      }).select('id, wine_id, rating').single()
+      if (data) setMyNotes((prev) => ({ ...prev, [wineId]: { id: data.id, rating: data.rating } }))
+    }
+    setSavingNoteWineId(null)
   }
 
   function calcPenalty(scheduledAt: string | null): { amount: number; label: string } | null {
@@ -242,32 +211,6 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
     if (orderMode) { setOrderMode(false); setRecommendation(null) }
   }
 
-  async function addCostItem() {
-    const amount = parseInt(newAmount.replace(/,/g, ''))
-    if (isNaN(amount) || amount <= 0 || !user) return
-    setAddingCost(true)
-    await supabase.from('session_cost_items').insert({
-      session_id: id, round_number: newRound, category: newCategory,
-      description: newDescription.trim() || null, amount,
-    })
-    setNewAmount(''); setNewDescription(''); setShowCostForm(false)
-    await fetchCostItems()
-    setAddingCost(false)
-  }
-
-  async function deleteCostItem(itemId: string) {
-    await supabase.from('session_cost_items').delete().eq('id', itemId)
-    setCostItems((prev) => prev.filter((c) => c.id !== itemId))
-  }
-
-  async function saveCarryover() {
-    const val = parseInt(carryoverInput.replace(/,/g, '')) || 0
-    setSavingCarryover(true)
-    await supabase.from('sessions').update({ subsidy_carryover: val }).eq('id', id)
-    setSession((prev) => prev ? { ...prev, subsidy_carryover: val } : prev)
-    setSavingCarryover(false)
-  }
-
   function toLocalDTInput(isoStr: string): string {
     const d = new Date(isoStr)
     const pad = (n: number) => String(n).padStart(2, '0')
@@ -297,14 +240,14 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
     const d = session.scheduled_at ? new Date(session.scheduled_at) : null
     const dateStr = d ? d.toLocaleDateString('ko-KR', { month: 'long', day: 'numeric', weekday: 'short' }) : ''
     const timeStr = d ? d.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }) : ''
-    const attendingNames = attendingList.map((r) => (r as any).user?.nickname ?? '멤버').join(', ')
+    const attendingNames = settlement.attendingList.map((r) => (r as any).user?.nickname ?? '멤버').join(', ')
     const lines = [
       `🍷 ${session.title} 리마인드`,
       '',
       ...(dateStr ? [`📅 ${dateStr}${timeStr ? ` ${timeStr}` : ''}`] : []),
       ...(session.venue ? [`📍 ${session.venue}`] : []),
       '',
-      `✅ 참석 확정 (${attendingCount}명)`,
+      `✅ 참석 확정 (${settlement.attendingCount}명)`,
       attendingNames || '(아직 없음)',
     ]
     navigator.clipboard.writeText(lines.join('\n'))
@@ -331,7 +274,7 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
     try {
       await fetch('/api/push/send', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-device-token': user!.device_token },
+        headers: { 'Content-Type': 'application/json', 'x-device-token': getDeviceToken() },
         body: JSON.stringify({
           title: `📣 참석 투표 마감 임박`,
           body: `${session?.title} 참석 여부를 아직 응답하지 않은 분들은 지금 바로 투표해주세요!`,
@@ -344,41 +287,13 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
     }
   }
 
-  async function syncCarryoverToNext(amount: number) {
-    if (!session?.scheduled_at) return
-    const { data: nextSession } = await supabase
-      .from('sessions')
-      .select('id')
-      .gt('scheduled_at', session.scheduled_at)
-      .in('status', ['planning', 'active'])
-      .order('scheduled_at', { ascending: true })
-      .limit(1)
-      .maybeSingle()
-
-    if (nextSession) {
-      await supabase.from('sessions')
-        .update({ subsidy_carryover: amount })
-        .eq('id', nextSession.id)
-    }
-  }
-
-  async function toggleSettlementPublished() {
-    if (!session) return
-    setPublishingSettlement(true)
-    const newVal = !session.settlement_published
-    await supabase.from('sessions').update({ settlement_published: newVal }).eq('id', id)
-    if (newVal) await syncCarryoverToNext(carryoverToNext)
-    setSession((prev) => prev ? { ...prev, settlement_published: newVal } : prev)
-    setPublishingSettlement(false)
-  }
-
   async function recommendOrder() {
     setRecommending(true)
     setRecommendation(null)
     try {
       const res = await fetch('/api/recommend-order', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-device-token': user!.device_token },
+        headers: { 'Content-Type': 'application/json', 'x-device-token': getDeviceToken() },
         body: JSON.stringify({ sessionId: id }),
       })
       const json = await res.json()
@@ -422,81 +337,14 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
     setSavingOrder(false)
   }
 
-  async function generateReview() {
-    setGeneratingReview(true)
-    setReview('')
-    try {
-      const res = await fetch('/api/review', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-device-token': user!.device_token },
-        body: JSON.stringify({ sessionId: id }),
-      })
-      const json = await res.json()
-      setReview(json.success ? json.review : '후기 생성에 실패했어요.')
-    } catch {
-      setReview('후기 생성에 실패했어요.')
-    }
-    setGeneratingReview(false)
-  }
-
-  // 정산 계산
-  const attendingList = rsvps.filter((r) => r.status === 'attending')
-  const notAttendingList = rsvps.filter((r) => r.status === 'not_attending')
-  const attendingCount = attendingList.length
-  // 미투표자
-  const votedUserIds = new Set(rsvps.map((r) => r.user_id))
-  const unvotedMembers = allMembers.filter((m) => !votedUserIds.has(m.id))
-  // 정산용: 미투표자도 불참 처리 (지원금 반액 적립)
-  const notAttendingCount = Math.max(0, totalActiveMembers - attendingCount)
-  const subsidyAttending = attendingCount * SUBSIDY_PER_PERSON
-  const subsidyNotAttending = notAttendingCount * (SUBSIDY_PER_PERSON / 2)
-  const carryoverFromPrev = session?.subsidy_carryover ?? 0
-  const totalSubsidy = subsidyAttending + subsidyNotAttending + carryoverFromPrev
-  const carryoverToNext = notAttendingCount * (SUBSIDY_PER_PERSON / 2)
-  const rounds = [...new Set(costItems.map((c) => c.round_number))].sort((a, b) => a - b)
-  const totalCosts = costItems.reduce((sum, c) => sum + c.amount, 0)
-  const totalPenalties = penalties.reduce((sum, p) => sum + p.amount, 0)
-  const selfPay = Math.max(0, totalCosts - totalSubsidy - totalPenalties)
-  const perPerson = attendingCount > 0 ? Math.ceil(selfPay / attendingCount) : 0
-  const myPenalty = penalties.find((p) => p.user_id === user?.id)
-  // 차수별 정산 계산
-  const hasRoundData = attendingList.some((r) => r.attended_rounds !== null && r.attended_rounds !== undefined)
-  const roundStats = rounds.map((r) => {
-    const roundCost = costItems.filter((c) => c.round_number === r).reduce((s, c) => s + c.amount, 0)
-    const roundSelfPay = totalCosts > 0 ? selfPay * (roundCost / totalCosts) : 0
-    const roundAttendees = attendingList.filter((rsvp) => {
-      const ar = rsvp.attended_rounds
-      return ar === null || ar === undefined || ar.includes(r)
-    })
-    const roundPerPerson = roundAttendees.length > 0 ? Math.ceil(roundSelfPay / roundAttendees.length) : 0
-    return { round: r, cost: roundCost, selfPay: roundSelfPay, attendees: roundAttendees, perPerson: roundPerPerson }
+  // 정산 계산 (순수 함수)
+  const settlement = calcSettlement({
+    rsvps, allMembers, costItems, penalties,
+    carryoverFromPrev: session?.subsidy_carryover ?? 0,
   })
-  const getMemberShare = (userId: string) =>
-    roundStats.reduce((total, rs) => {
-      if (rs.attendees.some((r) => r.user_id === userId)) return total + rs.perPerson
-      return total
-    }, 0)
-  const myShare = user ? getMemberShare(user.id) : 0
-  // 참석 차수 조합(예: 1차만 / 전체)이 같은 사람끼리 묶어 인당 "총" 부담금을 계산 (차수별 증분이 아니라 최종 합산액)
-  const attendeeGroups = hasRoundData
-    ? Array.from(
-        attendingList.reduce((map, r) => {
-          const memberRounds = (r.attended_rounds ?? rounds).slice().sort((a, b) => a - b)
-          const key = memberRounds.join(',')
-          const g = map.get(key)
-          if (g) g.count += 1
-          else map.set(key, { rounds: memberRounds, count: 1, total: getMemberShare(r.user_id) })
-          return map
-        }, new Map<string, { rounds: number[]; count: number; total: number }>()).values()
-      ).sort((a, b) => b.rounds.length - a.rounds.length || a.rounds[0] - b.rounds[0])
-    : []
-
-  // 정산 공개 중일 때 투표/비용/불참비가 바뀌면 다음 모임 이월액도 자동 재동기화
-  // (재공개 토글을 다시 누르지 않아도 최신 값이 반영되도록)
-  useEffect(() => {
-    if (!session?.settlement_published) return
-    syncCarryoverToNext(carryoverToNext)
-  }, [session?.settlement_published, carryoverToNext])
+  const dataLoaded = rsvpsLoaded && membersLoaded
+  const myPenalty = penalties.find((p) => p.user_id === user?.id)
+  const myRsvpRow = user ? rsvps.find((r) => r.user_id === user.id) : undefined
 
   // RSVP 마감 계산
   const deadline = session?.rsvp_deadline ? new Date(session.rsvp_deadline) : null
@@ -587,27 +435,27 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
           </div>
           {allMembers.length > 0 && (
             <span className="text-xs text-muted-foreground">
-              참석 {attendingCount}명 · 불참 {notAttendingList.length}명 · 미투표 {unvotedMembers.length}명 / 전체 {totalActiveMembers}명
+              참석 {settlement.attendingCount}명 · 불참 {settlement.notAttendingList.length}명 · 미투표 {settlement.unvotedMembers.length}명 / 전체 {settlement.totalActiveMembers}명
             </span>
           )}
         </div>
-        {(rsvps.length > 0 || unvotedMembers.length > 0) && (
+        {(rsvps.length > 0 || settlement.unvotedMembers.length > 0) && (
           <div className="flex flex-wrap gap-1.5 mt-2">
-            {attendingList.map((r) => (
+            {settlement.attendingList.map((r) => (
               <button key={r.id}
                 onClick={() => user?.is_admin ? adminToggleRsvp(r.user_id, 'attending') : undefined}
                 className={`text-[11px] bg-green-50 text-green-700 border border-green-200 px-2 py-0.5 rounded-full ${user?.is_admin ? 'active:opacity-60' : ''}`}>
                 ✓ {(r as any).user?.nickname ?? '멤버'}
               </button>
             ))}
-            {notAttendingList.map((r) => (
+            {settlement.notAttendingList.map((r) => (
               <button key={r.id}
                 onClick={() => user?.is_admin ? adminToggleRsvp(r.user_id, 'not_attending') : undefined}
                 className={`text-[11px] bg-muted text-muted-foreground border border-border px-2 py-0.5 rounded-full ${user?.is_admin ? 'active:opacity-60' : ''}`}>
                 ✕ {(r as any).user?.nickname ?? '멤버'}
               </button>
             ))}
-            {unvotedMembers.map((m) => (
+            {settlement.unvotedMembers.map((m) => (
               <button key={m.id}
                 onClick={() => user?.is_admin ? adminToggleRsvp(m.id, null) : undefined}
                 className={`text-[11px] bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded-full ${user?.is_admin ? 'active:opacity-60' : ''}`}>
@@ -625,8 +473,13 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
     </div>
   )
 
-  // ─── 일반 멤버: 헤더(RSVP) + 와인 목록 + 정산 요약 ──────────────
+  // ─── 일반 멤버: 헤더(RSVP) + 와인 목록(퀵 레이팅) + 정산 ────────
   if (!user?.is_admin) {
+    // 확정 스냅샷 우선, 없으면(구버전 세션) 실시간 계산 폴백
+    const memberSnap = session.settlement_snapshot ?? buildSnapshot(settlement, costItems)
+    const showSettlement = session.settlement_published &&
+      (session.settlement_snapshot != null || costItems.length > 0)
+
     return (
       <div className="flex flex-col h-[calc(100vh-5rem)]">
         {Header}
@@ -663,10 +516,17 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
                             {sw.status === 'confirmed' ? '확정' : '제안'}
                           </Badge>
                         </div>
-                        <Link href={`/notes/new?wine_id=${sw.wine_id}&session_id=${id}`}
-                          className="inline-block text-xs text-primary font-medium">
-                          ✏️ 시음평 쓰기
-                        </Link>
+                        <div className="flex items-center justify-between">
+                          <QuickRating
+                            rating={myNotes[sw.wine_id]?.rating ?? null}
+                            onRate={(n) => quickRate(sw.wine_id, n)}
+                            disabled={savingNoteWineId === sw.wine_id}
+                          />
+                          <Link href={`/notes/new?wine_id=${sw.wine_id}&session_id=${id}`}
+                            className="text-xs text-primary font-medium shrink-0">
+                            ✏️ {myNotes[sw.wine_id] ? '시음평 이어쓰기' : '시음평 쓰기'}
+                          </Link>
+                        </div>
                       </div>
                     ))}
                   </>
@@ -675,99 +535,16 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
             </>
           )}
 
-          {/* 정산 요약 - 관리자가 공개한 경우만 표시 */}
-          {session.settlement_published && costItems.length > 0 && (
-            <div className="space-y-3 pt-2 border-t border-border">
-              <p className="text-sm font-semibold">💰 정산 내역</p>
-
-              {/* 비용 항목 */}
-              <div className="bg-muted rounded-xl p-4 space-y-1.5 text-xs">
-                {costItems.map((item) => (
-                  <div key={item.id} className="flex justify-between">
-                    <span className="text-muted-foreground">
-                      {item.round_number}차 {categoryLabel[item.category].replace(/^.\s/, '')}
-                      {item.description ? ` · ${item.description}` : ''}
-                    </span>
-                    <span>{item.amount.toLocaleString()}원</span>
-                  </div>
-                ))}
-                <div className="flex justify-between font-semibold border-t border-border pt-2 mt-1">
-                  <span>총 비용</span>
-                  <span>{totalCosts.toLocaleString()}원</span>
-                </div>
-              </div>
-
-              {/* 지원금 내역 */}
-              <div className="bg-muted rounded-xl p-4 space-y-1.5 text-xs">
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">당월 참석자 지원금 ({attendingCount}명 × 35,000)</span>
-                  <span className="text-green-600">{subsidyAttending.toLocaleString()}원</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">당월 불참석자 1/2 ({notAttendingCount}명 × 17,500)</span>
-                  <span className="text-green-600">{subsidyNotAttending.toLocaleString()}원</span>
-                </div>
-                {carryoverFromPrev > 0 && (
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">전월 이월 지원금</span>
-                    <span className="text-green-600">{carryoverFromPrev.toLocaleString()}원</span>
-                  </div>
-                )}
-                <div className="flex justify-between font-semibold border-t border-border pt-2 mt-1">
-                  <span>총 지원금</span>
-                  <span className="text-green-600">- {totalSubsidy.toLocaleString()}원</span>
-                </div>
-                {totalPenalties > 0 && (
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">불참비 (풀 투입)</span>
-                    <span className="text-destructive">- {totalPenalties.toLocaleString()}원</span>
-                  </div>
-                )}
-              </div>
-
-              {/* 1인당 / 내 부담금 */}
-              {attendingCount > 0 && (
-                <div className="bg-primary/5 border border-primary/20 rounded-xl p-4 text-center space-y-3">
-                  {hasRoundData && user ? (
-                    <>
-                      <p className="text-xs text-muted-foreground">내 부담금</p>
-                      <p className="text-3xl font-bold text-primary mt-1">{myShare.toLocaleString()}원</p>
-                      {roundStats.length > 1 && (
-                        <div className="mt-2 space-y-0.5">
-                          {roundStats.map((rs) => (
-                            <p key={rs.round} className="text-[11px] text-muted-foreground">
-                              {rs.round}차 ({rs.attendees.length}명): {rs.perPerson.toLocaleString()}원/인
-                            </p>
-                          ))}
-                        </div>
-                      )}
-                    </>
-                  ) : (
-                    <>
-                      <p className="text-xs text-muted-foreground">참석자 실 부담금 · 1인당</p>
-                      <p className="text-3xl font-bold text-primary mt-1">{perPerson.toLocaleString()}원</p>
-                    </>
-                  )}
-                  {(() => {
-                    const isAttending = rsvps.some((r) => r.user_id === user?.id && r.status === 'attending')
-                    if (!isAttending) return null
-                    const amount = hasRoundData ? myShare : perPerson
-                    const bank = paymentInfo?.bank
-                    const account = paymentInfo?.account
-                    if (!bank || !account || amount <= 0) return null
-                    const tossUrl = `supertoss://send?amount=${amount}&bank=${bank}&accountNo=${account}&origin=와인클럽정산`
-                    return (
-                      <a
-                        href={tossUrl}
-                        className="block w-full bg-[#0064FF] text-white text-sm font-semibold py-3 rounded-xl text-center"
-                      >
-                        토스로 송금하기 · {amount.toLocaleString()}원
-                      </a>
-                    )
-                  })()}
-                </div>
-              )}
-            </div>
+          {/* 정산 내역 - 관리자가 확정·공개한 경우만 표시 */}
+          {showSettlement && (
+            <MemberSettlement
+              snap={memberSnap}
+              confirmed={session.settlement_snapshot != null}
+              userId={user?.id}
+              isAttending={myRsvp === 'attending'}
+              paidAt={myRsvpRow?.paid_at ?? null}
+              paymentInfo={paymentInfo}
+            />
           )}
         </div>
       </div>
@@ -891,6 +668,11 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
                     {sw.status === 'confirmed' ? '확정' : '제안'}
                   </Badge>
                 </div>
+                <QuickRating
+                  rating={myNotes[sw.wine_id]?.rating ?? null}
+                  onRate={(n) => quickRate(sw.wine_id, n)}
+                  disabled={savingNoteWineId === sw.wine_id}
+                />
                 <div className="flex gap-3">
                   <Link href={`/notes/new?wine_id=${sw.wine_id}&session_id=${id}`} className="text-xs text-primary font-medium">시음평 쓰기</Link>
                   <Link href={`/wines/${sw.wine_id}`} className="text-xs text-muted-foreground font-medium">정보 수정</Link>
@@ -907,373 +689,19 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
 
       {/* 정산 탭 */}
       {tab === 'settlement' && (
-        <div className="flex-1 overflow-y-auto px-4 py-4 space-y-5">
-          {/* 참석자 현황 */}
-          <div className="space-y-3">
-            <p className="text-sm font-semibold">참석자 현황</p>
-            <div className="flex flex-wrap gap-2">
-              {attendingList.map((r) => (
-                <span key={r.id} className="text-xs bg-green-50 text-green-700 border border-green-200 px-2 py-1 rounded-full">
-                  ✓ {(r as any).user?.nickname ?? '멤버'}
-                </span>
-              ))}
-              {notAttendingList.map((r) => (
-                <span key={r.id} className="text-xs bg-muted text-muted-foreground border border-border px-2 py-1 rounded-full">
-                  ✕ {(r as any).user?.nickname ?? '멤버'}
-                </span>
-              ))}
-              {unvotedMembers.map((m) => (
-                <span key={m.id} className="text-xs bg-amber-50 text-amber-700 border border-amber-200 px-2 py-1 rounded-full">
-                  ? {m.nickname}
-                </span>
-              ))}
-              {rsvps.length === 0 && unvotedMembers.length === 0 && (
-                <p className="text-sm text-muted-foreground">아직 응답이 없어요</p>
-              )}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              참석 {attendingCount}명 · 불참 {notAttendingList.length}명 · 미투표 {unvotedMembers.length}명 / 전체 {totalActiveMembers}명
-            </p>
-
-            {/* 차수별 참석 설정 */}
-            {attendingList.length > 0 && rounds.length > 0 && (
-              <div className="bg-muted/60 rounded-xl p-3 space-y-2">
-                <p className="text-xs font-semibold text-muted-foreground">차수별 참석 설정</p>
-                {attendingList.map((rsvp) => {
-                  const ar = rsvp.attended_rounds
-                  const attendedRounds = ar ?? rounds
-                  return (
-                    <div key={rsvp.id} className="flex items-center gap-2">
-                      <span className="text-xs font-medium w-16 shrink-0 truncate">{(rsvp as any).user?.nickname ?? '멤버'}</span>
-                      <div className="flex gap-1">
-                        {rounds.map((r) => (
-                          <button
-                            key={r}
-                            onClick={() => toggleRound(rsvp.user_id, r, ar, rounds)}
-                            disabled={savingRounds === rsvp.user_id}
-                            className={`text-xs px-2.5 py-1 rounded-full border font-medium transition-colors ${
-                              attendedRounds.includes(r)
-                                ? 'bg-green-500 text-white border-green-500'
-                                : 'bg-background text-muted-foreground border-border'
-                            } disabled:opacity-50`}
-                          >
-                            {r}차
-                          </button>
-                        ))}
-                      </div>
-                      {hasRoundData && (
-                        <span className="text-xs text-muted-foreground ml-auto shrink-0">
-                          {getMemberShare(rsvp.user_id).toLocaleString()}원
-                        </span>
-                      )}
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-          </div>
-
-          {/* 비용 항목 */}
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <p className="text-sm font-semibold">비용 항목</p>
-              <button onClick={() => setShowCostForm(!showCostForm)} className="text-xs text-primary font-medium">+ 추가</button>
-            </div>
-            {showCostForm && (
-              <div className="bg-muted rounded-xl p-3 space-y-2">
-                <div className="flex gap-2">
-                  <select value={newRound} onChange={(e) => setNewRound(Number(e.target.value))}
-                    className="text-sm border border-border rounded-lg px-2 py-1.5 bg-background">
-                    {[1, 2, 3].map((n) => <option key={n} value={n}>{n}차</option>)}
-                  </select>
-                  <select value={newCategory} onChange={(e) => setNewCategory(e.target.value as CostItem['category'])}
-                    className="text-sm border border-border rounded-lg px-2 py-1.5 bg-background flex-1">
-                    {Object.entries(categoryLabel).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-                  </select>
-                </div>
-                <Input placeholder="메모 (선택)" value={newDescription} onChange={(e) => setNewDescription(e.target.value)} />
-                <div className="flex gap-2">
-                  <Input placeholder="금액 (원)" value={newAmount} onChange={(e) => setNewAmount(e.target.value)} type="number" className="flex-1" />
-                  <Button size="sm" onClick={addCostItem} disabled={!newAmount || addingCost}>{addingCost ? '...' : '추가'}</Button>
-                </div>
-              </div>
-            )}
-            {rounds.length === 0 ? (
-              <p className="text-sm text-muted-foreground">아직 비용이 없어요</p>
-            ) : (
-              rounds.map((round) => {
-                const items = costItems.filter((c) => c.round_number === round)
-                const roundTotal = items.reduce((s, c) => s + c.amount, 0)
-                return (
-                  <div key={round} className="space-y-1">
-                    <div className="flex items-center justify-between">
-                      <p className="text-xs font-semibold text-muted-foreground">{round}차</p>
-                      <p className="text-xs font-semibold">{roundTotal.toLocaleString()}원</p>
-                    </div>
-                    {items.map((item) => (
-                      <div key={item.id} className="flex items-center justify-between bg-card border border-border rounded-lg px-3 py-2">
-                        <div>
-                          <span className="text-xs">{categoryLabel[item.category]}</span>
-                          {item.description && <span className="text-xs text-muted-foreground ml-1">· {item.description}</span>}
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs font-medium">{item.amount.toLocaleString()}원</span>
-                          <button onClick={() => deleteCostItem(item.id)} className="text-xs text-destructive">✕</button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )
-              })
-            )}
-          </div>
-
-          {/* 지원금 */}
-          <div className="space-y-2">
-            <p className="text-sm font-semibold">지원금</p>
-            <div className="flex gap-2 items-center">
-              <span className="text-xs text-muted-foreground whitespace-nowrap">전월 이월</span>
-              <Input value={carryoverInput} onChange={(e) => setCarryoverInput(e.target.value)} type="number" className="flex-1" placeholder="0" />
-              <Button size="sm" onClick={saveCarryover} disabled={savingCarryover}>{savingCarryover ? '...' : '저장'}</Button>
-            </div>
-            <div className="bg-muted rounded-xl p-3 space-y-1.5 text-xs">
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">참석자 지원금 ({attendingCount}명 × 35,000)</span>
-                <span>{subsidyAttending.toLocaleString()}원</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">불참자 지원금 1/2 ({notAttendingCount}명 × 17,500)</span>
-                <span>{subsidyNotAttending.toLocaleString()}원</span>
-              </div>
-              {carryoverFromPrev > 0 && (
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">전월 이월</span>
-                  <span>{carryoverFromPrev.toLocaleString()}원</span>
-                </div>
-              )}
-              <div className="flex justify-between font-semibold border-t border-border pt-1.5 mt-1">
-                <span>총 지원금</span>
-                <span className="text-green-600">{totalSubsidy.toLocaleString()}원</span>
-              </div>
-            </div>
-          </div>
-
-          {/* 벌금 내역 */}
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <p className="text-sm font-semibold">⚠️ 불참비 내역</p>
-              <button onClick={() => setShowAddPenalty(!showAddPenalty)} className="text-xs text-primary font-medium">+ 수동 추가</button>
-            </div>
-            {showAddPenalty && (
-              <div className="bg-muted rounded-xl p-3 space-y-2">
-                <select
-                  value={newPenaltyUserId}
-                  onChange={(e) => setNewPenaltyUserId(e.target.value)}
-                  className="w-full text-sm border border-border rounded-lg px-3 py-2 bg-background"
-                >
-                  <option value="">멤버 선택</option>
-                  {allMembers.map(m => (
-                    <option key={m.id} value={m.id}>{m.nickname}</option>
-                  ))}
-                </select>
-                <div className="flex gap-2">
-                  <select
-                    value={newPenaltyReason}
-                    onChange={(e) => setNewPenaltyReason(e.target.value)}
-                    className="text-sm border border-border rounded-lg px-3 py-2 bg-background"
-                  >
-                    <option value="D-day">D-day (2만원)</option>
-                    <option value="D-1">D-1 (1만원)</option>
-                    <option value="기타">기타</option>
-                  </select>
-                  <input
-                    type="number"
-                    placeholder="금액"
-                    value={newPenaltyAmount}
-                    onChange={(e) => setNewPenaltyAmount(e.target.value)}
-                    className="flex-1 text-sm border border-border rounded-lg px-3 py-2 bg-background"
-                  />
-                </div>
-                <button
-                  onClick={addManualPenalty}
-                  disabled={!newPenaltyUserId || !newPenaltyAmount || addingPenalty}
-                  className="w-full bg-destructive text-white text-sm font-medium py-2 rounded-xl disabled:opacity-50"
-                >
-                  {addingPenalty ? '추가 중...' : '불참비 추가'}
-                </button>
-              </div>
-            )}
-            {penalties.length > 0 && (
-              <div className="bg-destructive/5 border border-destructive/20 rounded-xl p-3 space-y-1.5 text-xs">
-                {penalties.map((p) => (
-                  <div key={p.id} className="flex items-center justify-between">
-                    <span className="text-muted-foreground">
-                      {(p as any).user?.nickname ?? '멤버'} · {p.reason} 취소
-                    </span>
-                    <div className="flex items-center gap-2">
-                      <span className="text-destructive font-medium">- {p.amount.toLocaleString()}원</span>
-                      <button onClick={() => deletePenaltyById(p.id)} className="text-muted-foreground hover:text-destructive text-xs">✕</button>
-                    </div>
-                  </div>
-                ))}
-                <div className="flex justify-between font-semibold border-t border-destructive/20 pt-1.5 mt-1">
-                  <span>불참비 합계 (정산 풀 투입)</span>
-                  <span className="text-destructive">- {totalPenalties.toLocaleString()}원</span>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* 최종 정산 */}
-          {totalCosts > 0 && (
-            <div className="bg-primary/5 border border-primary/20 rounded-2xl p-4 space-y-2">
-              <p className="text-sm font-semibold">최종 정산</p>
-              <div className="space-y-1 text-xs">
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">총 비용</span><span>{totalCosts.toLocaleString()}원</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">총 지원금</span>
-                  <span className="text-green-600">- {totalSubsidy.toLocaleString()}원</span>
-                </div>
-                {totalPenalties > 0 && (
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">불참비 (풀 투입)</span>
-                    <span className="text-destructive">- {totalPenalties.toLocaleString()}원</span>
-                  </div>
-                )}
-                <div className="flex justify-between font-semibold border-t border-primary/20 pt-1.5 mt-1">
-                  <span>실부담금</span><span>{selfPay.toLocaleString()}원</span>
-                </div>
-              </div>
-              {/* 차수별 인당 비용 */}
-              {hasRoundData && roundStats.length > 1 && (
-                <div className="space-y-1 pt-2 border-t border-primary/20">
-                  <p className="text-xs font-semibold text-muted-foreground">차수별 인당 부담금</p>
-                  {roundStats.map((rs) => (
-                    <div key={rs.round} className="flex justify-between text-xs">
-                      <span className="text-muted-foreground">{rs.round}차 ({rs.attendees.length}명)</span>
-                      <span className="font-medium">{rs.perPerson.toLocaleString()}원/인</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {attendingCount > 0 && (
-                <div className="text-center pt-2 border-t border-primary/20">
-                  {hasRoundData ? (
-                    <>
-                      <p className="text-xs text-muted-foreground">멤버별 부담금 (차수 기준)</p>
-                      <div className="mt-1.5 space-y-1">
-                        {attendingList.map((r) => (
-                          <div key={r.id} className="flex justify-between text-sm">
-                            <span className="font-medium">{(r as any).user?.nickname ?? '멤버'}</span>
-                            <span className="font-bold text-primary">{getMemberShare(r.user_id).toLocaleString()}원</span>
-                          </div>
-                        ))}
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <p className="text-xs text-muted-foreground">1인당 ({attendingCount}명)</p>
-                      <p className="text-2xl font-bold text-primary">{perPerson.toLocaleString()}원</p>
-                      <p className="text-[10px] text-muted-foreground mt-0.5">
-                        수거 예상: {(perPerson * attendingCount).toLocaleString()}원
-                        {perPerson * attendingCount !== selfPay && ` (차액 +${(perPerson * attendingCount - selfPay).toLocaleString()}원 이월 처리)`}
-                      </p>
-                    </>
-                  )}
-                </div>
-              )}
-              {/* 카톡 공지 복사 */}
-              {attendingCount > 0 && (
-                <button
-                  onClick={() => {
-                    const dateStr = session.scheduled_at
-                      ? new Date(session.scheduled_at).toLocaleDateString('ko-KR', { month: 'long', day: 'numeric', weekday: 'short' })
-                      : ''
-                    const roundLines = rounds.map((r) => {
-                      const items = costItems.filter((c) => c.round_number === r)
-                      return items.map((item) => `  · ${item.description || categoryLabel[item.category].replace(/^[^\s]+ /, '')} ${item.amount.toLocaleString()}원`).join('\n')
-                    }).join('\n')
-                    const settlementLines = hasRoundData
-                      ? attendeeGroups.map((g) => {
-                          const label = g.rounds.length === rounds.length ? '전체 참석' : `${g.rounds.join('+')}차만 참석`
-                          return `  · ${label} (${g.count}명): ${g.total.toLocaleString()}원`
-                        }).join('\n')
-                      : `  · 1인당 ${perPerson.toLocaleString()}원 (${attendingCount}명)`
-                    const penaltyLines = penalties.length > 0
-                      ? penalties.map((p) => `  · ${(p as any).user?.nickname ?? '멤버'}: ${p.amount.toLocaleString()}원 (${p.reason})`).join('\n')
-                      : ''
-                  const msg = [
-                      `🍷 ${session.title} 정산 안내`,
-                      dateStr ? `📅 ${dateStr}` : '',
-                      '',
-                      `참석 ${attendingCount}명 / 전체 ${totalActiveMembers}명`,
-                      '',
-                      '💰 비용 내역',
-                      roundLines,
-                      `합계: ${totalCosts.toLocaleString()}원`,
-                      '',
-                      `회사 지원금: ${totalSubsidy.toLocaleString()}원`,
-                      ...(totalPenalties > 0 ? [`불참비 (풀 투입): ${totalPenalties.toLocaleString()}원`] : []),
-                      `실 부담금: ${selfPay.toLocaleString()}원`,
-                      '',
-                      hasRoundData ? '✅ 정산 (참석 유형별 인당 금액)' : '✅ 정산',
-                      settlementLines,
-                      ...(penaltyLines ? ['', '⚠️ 불참비 대상 (개인 부담, 별도 입금)', penaltyLines] : []),
-                    ].filter((l) => l !== undefined).join('\n')
-                    navigator.clipboard.writeText(msg)
-                    alert('카톡 공지 문구가 복사됐어요!')
-                  }}
-                  className="w-full mt-2 text-xs text-primary font-medium bg-primary/10 py-2 rounded-lg"
-                >
-                  📋 카톡 공지 복사
-                </button>
-              )}
-            </div>
-          )}
-
-          {/* 익월 이월 */}
-          {notAttendingCount > 0 && (
-            <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-xs space-y-0.5">
-              <p className="font-semibold text-amber-800">익월 이월 지원금</p>
-              <p className="text-amber-700">불참 {notAttendingCount}명 × 17,500원 = <span className="font-bold">{carryoverToNext.toLocaleString()}원</span></p>
-              <p className="text-amber-600">정산 공개 시 다음 모임에 자동 반영돼요</p>
-            </div>
-          )}
-
-          {/* 멤버 공개 토글 */}
-          {totalCosts > 0 && (
-            <button
-              onClick={toggleSettlementPublished}
-              disabled={publishingSettlement}
-              className={`w-full py-3 rounded-xl text-sm font-semibold border-2 transition-all ${
-                session.settlement_published
-                  ? 'bg-green-500 text-white border-green-500'
-                  : 'border-border text-muted-foreground'
-              }`}
-            >
-              {publishingSettlement ? '처리 중...' : session.settlement_published ? '✓ 멤버에게 정산 공개 중 (탭하여 숨기기)' : '멤버에게 정산 공개하기'}
-            </button>
-          )}
-
-          {/* AI 후기 */}
-          <div className="space-y-3 pt-2 border-t border-border">
-            <div>
-              <p className="text-sm font-semibold">모임 후기 자동 생성</p>
-              <p className="text-xs text-muted-foreground mt-0.5">시음평을 바탕으로 회사 게시판용 후기를 AI가 작성해요</p>
-            </div>
-            <Button onClick={generateReview} disabled={generatingReview} className="w-full">
-              {generatingReview ? '✍️ 작성 중...' : '✍️ 후기 생성하기'}
-            </Button>
-            {review && (
-              <div className="space-y-2">
-                <div className="bg-muted rounded-xl p-4 text-sm whitespace-pre-wrap leading-relaxed">{review}</div>
-                <button onClick={() => navigator.clipboard.writeText(review)} className="text-xs text-primary font-medium">📋 복사하기</button>
-              </div>
-            )}
-          </div>
-        </div>
+        <SettlementTab
+          sessionId={id}
+          session={session}
+          settlement={settlement}
+          costItems={costItems}
+          penalties={penalties}
+          allMembers={allMembers}
+          dataLoaded={dataLoaded}
+          onSessionChange={(patch) => setSession((prev) => prev ? { ...prev, ...patch } : prev)}
+          refetchCostItems={fetchCostItems}
+          refetchPenalties={fetchPenalties}
+          refetchRsvps={fetchRsvps}
+        />
       )}
     </div>
   )

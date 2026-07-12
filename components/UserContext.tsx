@@ -37,10 +37,12 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     setUser(stored)
     setLoading(false)
 
-    // DB 검증은 백그라운드 (삭제된 계정 감지)
+    // DB 검증은 백그라운드 (삭제된 계정 감지) — device_token 컬럼은 anon 조회 불가
     ;(async () => {
       try {
-        const { data } = await supabase.from('users').select('*').eq('id', stored.id).maybeSingle()
+        const { data } = await supabase.from('users')
+          .select('id, nickname, is_admin, is_active, subsidy_eligible, created_at')
+          .eq('id', stored.id).eq('is_active', true).maybeSingle()
         if (data) {
           setUser(data as User)
           localStorage.setItem('wine_club_user', JSON.stringify(data))
