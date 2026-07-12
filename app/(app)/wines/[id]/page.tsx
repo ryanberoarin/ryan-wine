@@ -292,9 +292,10 @@ export default function WineDetailPage({ params }: { params: Promise<{ id: strin
       {/* 내 시음평 바로가기 */}
       <div className="flex gap-2">
         {myNote ? (
-          <div className="flex-1 bg-primary/5 border border-primary/20 rounded-xl px-4 py-2.5 text-xs text-primary font-medium text-center">
-            ✓ 내 시음평 작성 완료
-          </div>
+          <Link href={`/notes/new?wine_id=${id}${myNote.session_id ? `&session_id=${myNote.session_id}` : ''}`}
+            className="flex-1 bg-primary/5 border border-primary/20 rounded-xl px-4 py-2.5 text-xs text-primary font-medium text-center">
+            ✓ 내 시음평 작성 완료 · 수정하기
+          </Link>
         ) : (
           <Link href={`/notes/new?wine_id=${id}`}
             className="flex-1 bg-primary text-primary-foreground text-sm font-medium text-center px-4 py-2.5 rounded-xl">

@@ -5,12 +5,44 @@ import Link from 'next/link'
 import { supabase, Session } from '@/lib/supabase'
 import { useUser } from '@/components/UserContext'
 import { Card } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
 
 const statusLabel: Record<string, { label: string; color: string }> = {
   planning: { label: '준비 중', color: 'bg-yellow-100 text-yellow-800' },
   active: { label: '진행 중', color: 'bg-green-100 text-green-800' },
   completed: { label: '완료', color: 'bg-muted text-muted-foreground' },
+}
+
+function isPast(session: Session): boolean {
+  if (session.status === 'completed') return true
+  if (!session.scheduled_at) return false
+  return new Date(session.scheduled_at) < new Date()
+}
+
+function SessionCard({ session, dimmed }: { session: Session; dimmed: boolean }) {
+  const st = statusLabel[session.status]
+  return (
+    <Link href={`/sessions/${session.id}`}>
+      <Card className={`p-4 space-y-2 hover:shadow-md transition-shadow ${dimmed ? 'opacity-50' : ''}`}>
+        <div className="flex items-start justify-between gap-2">
+          <p className="font-semibold">{session.title}</p>
+          <span className={`text-xs px-2 py-0.5 rounded-full font-medium shrink-0 ${st.color}`}>
+            {st.label}
+          </span>
+        </div>
+        {session.description && (
+          <p className="text-sm text-muted-foreground line-clamp-1">{session.description}</p>
+        )}
+        {session.scheduled_at && (
+          <p className="text-xs text-muted-foreground">
+            {new Date(session.scheduled_at).toLocaleDateString('ko-KR', {
+              year: 'numeric', month: 'long', day: 'numeric',
+              hour: '2-digit', minute: '2-digit',
+            })}
+          </p>
+        )}
+      </Card>
+    </Link>
+  )
 }
 
 export default function SessionsPage() {
@@ -28,6 +60,16 @@ export default function SessionsPage() {
         setLoading(false)
       })
   }, [])
+
+  // 다가오는 모임(날짜 가까운 순) 위, 지난 모임(최신순) 아래 디밍 처리
+  const upcoming = sessions.filter((s) => !isPast(s))
+    .sort((a, b) => {
+      if (!a.scheduled_at) return -1
+      if (!b.scheduled_at) return 1
+      return new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime()
+    })
+  const past = sessions.filter(isPast)
+    .sort((a, b) => new Date(b.scheduled_at ?? 0).getTime() - new Date(a.scheduled_at ?? 0).getTime())
 
   return (
     <div className="px-4 py-6 space-y-4">
@@ -61,33 +103,25 @@ export default function SessionsPage() {
           )}
         </div>
       ) : (
-        <div className="space-y-3">
-          {sessions.map((session) => {
-            const st = statusLabel[session.status]
-            return (
-              <Link key={session.id} href={`/sessions/${session.id}`}>
-                <Card className="p-4 space-y-2 hover:shadow-md transition-shadow">
-                  <div className="flex items-start justify-between gap-2">
-                    <p className="font-semibold">{session.title}</p>
-                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium shrink-0 ${st.color}`}>
-                      {st.label}
-                    </span>
-                  </div>
-                  {session.description && (
-                    <p className="text-sm text-muted-foreground line-clamp-1">{session.description}</p>
-                  )}
-                  {session.scheduled_at && (
-                    <p className="text-xs text-muted-foreground">
-                      {new Date(session.scheduled_at).toLocaleDateString('ko-KR', {
-                        year: 'numeric', month: 'long', day: 'numeric',
-                        hour: '2-digit', minute: '2-digit',
-                      })}
-                    </p>
-                  )}
-                </Card>
-              </Link>
-            )
-          })}
+        <div className="space-y-6">
+          {upcoming.length > 0 && (
+            <div className="space-y-3">
+              {upcoming.map((session) => (
+                <SessionCard key={session.id} session={session} dimmed={false} />
+              ))}
+            </div>
+          )}
+
+          {past.length > 0 && (
+            <div className="space-y-3">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide pt-2 border-t border-border">
+                지난 모임
+              </p>
+              {past.map((session) => (
+                <SessionCard key={session.id} session={session} dimmed />
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
